@@ -18,6 +18,9 @@ import os
 import cv2
 import numpy as np
 import math
+from dotenv import load_dotenv
+
+load_dotenv()
 
 def get_model_path(model_name):
     """Get the full path for a model based on the checkpoints directory."""
