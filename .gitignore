@@ -2,6 +2,7 @@
 batch.script
 .vscode/
 checkpoints/
+MTASK*
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

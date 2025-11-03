@@ -26,14 +26,23 @@ def generate_image(input_image, prompt):
     )
     return outputs
 
+def save_images(prefix, images, output_dir):
+    os.makedirs(output_dir, exist_ok=True)
+    
+    for i, image in enumerate(images):
+        output_path = os.path.join(output_dir, f"{prefix}_{i+1}.png")
+        image.save(output_path)
+        print(f"Saved image to {output_path}")
+
 if __name__ == "__main__":
     use_test = True # use the test folder examples
 
     if use_test:
-        input_image = open('../test/test_image_input.jpg', 'rb')
+        file_name = "test_image_input"
+        input_image = open(f'../test/{file_name}.jpg', 'rb')
         with open('../test/prompt.txt', 'rb') as f:
             prompt = f.read()
+        output_dir = "../test/output"
 
-        output_image = generate_image(input_image, prompt)
-
-        print(output_image)
+        output_images = generate_image(input_image, prompt)
+        save_images(file_name, output_images, output_dir)
