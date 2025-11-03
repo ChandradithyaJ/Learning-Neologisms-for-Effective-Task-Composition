@@ -8,7 +8,11 @@ load_dotenv()
 hf_access_token = os.getenv("HF_ACCESS_TOKEN")
 
 # Download model checkpoints from Hugging Face
-snapshot_download("Djrango/Qwen2vl-Flux", token=hf_access_token)
+snapshot_download("Djrango/Qwen2vl-Flux",
+    token=hf_access_token,
+    local_dir="./checkpoints/qwen2vl_flux",
+    local_dir_use_symlinks=False
+)
 
 # instantiate the model
 model = FluxModel(device="cuda")
