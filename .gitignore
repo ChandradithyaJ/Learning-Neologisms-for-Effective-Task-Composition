@@ -3,6 +3,7 @@ batch.script
 .vscode/
 checkpoints/
 MTASK*
+test/output
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
