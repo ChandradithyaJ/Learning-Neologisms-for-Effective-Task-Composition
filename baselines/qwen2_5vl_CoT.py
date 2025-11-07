@@ -1,5 +1,9 @@
 from transformers import Qwen2_5_VLForConditionalGeneration, AutoTokenizer, AutoProcessor
 from qwen_vl_utils import process_vision_info
+import torch
+import os
+
+cache_directory = "..scratch/checkpoints/qwen2_5vl"
 
 cot_system_prompt = """
     System Prompts:
@@ -19,10 +23,16 @@ cot_system_prompt = """
 
 # default: Load the model on the available device(s)
 model = Qwen2_5_VLForConditionalGeneration.from_pretrained(
-    "Qwen/Qwen2.5-VL-7B-Instruct", torch_dtype="auto", device_map="auto"
+    "Qwen/Qwen2.5-VL-7B-Instruct",
+    torch_dtype="auto",
+    device_map="auto",
+    cache_dir=cache_directory
 )
 # default processer
-processor = AutoProcessor.from_pretrained("Qwen/Qwen2.5-VL-7B-Instruct")
+processor = AutoProcessor.from_pretrained(
+    "Qwen/Qwen2.5-VL-7B-Instruct",
+    cache_dir=cache_directory
+)
 
 # The default range for the number of visual tokens per image in the model is 4-16384.
 # You can set min_pixels and max_pixels according to your needs, such as a token range of 256-1280, to balance performance and cost.
@@ -94,7 +104,7 @@ def answer(image_path, prompt):
                     "type": "image",
                     "image": image_path,
                 },
-                {"type": "text", "text": "Describe this image."},
+                {"type": "text", "text": prompt},
             ],
         }
     ]
@@ -137,10 +147,10 @@ if __name__ == "__main__":
 
     if use_test:
         file_name = "apples"
-        input_image = open(f'../test/{file_name}.jpg', 'rb')
-        with open(f'../test/{file_name}.txt', 'rb') as f:
+        input_image = f'./test/{file_name}.jpg'
+        with open(f'./test/{file_name}.txt', 'r') as f:
             prompt = f.read()
-        output_dir = f"../test/{file_name}"
+        output_dir = f"./test/{file_name}"
 
         if use_CoT:
             subtasks = cot_subtasks(prompt)
@@ -163,5 +173,11 @@ if __name__ == "__main__":
             output = answer(input_image, prompt)
 
         # save output
-        with open(f'{output_dir}/{file_name}.txt', 'wb') as f:
-            f.write(output)
+        os.makedirs(output_dir, exist_ok=True)
+        with open(f'{output_dir}/output.txt', 'w') as f:
+            if use_CoT:
+                for i, subtask_output in enumerate(outputs):
+                    f.write(f"Subtask {i+1}:\n")
+                    f.write('\n'.join(subtask_output) + '\n\n')
+            else:
+                f.write('\n'.join(output))
