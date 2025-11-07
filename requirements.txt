@@ -1,2 +1,4 @@
 dotenv
-pip install git+https://github.com/huggingface/diffusers.git
+git+https://github.com/huggingface/diffusers.git
+git+https://github.com/huggingface/transformers.git@v4.49.0
+qwen_vl_utils

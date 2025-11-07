@@ -1,6 +1,5 @@
 from transformers import Qwen2_5_VLForConditionalGeneration, AutoTokenizer, AutoProcessor
 from qwen_vl_utils import process_vision_info
-from qwen2vl_flux_query import generate_image, save_images
 
 cot_system_prompt = """
     System Prompts:
@@ -86,23 +85,83 @@ def cot_subtasks(prompt):
 
     return subtasks
 
+def answer(image_path, prompt):
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "image",
+                    "image": image_path,
+                },
+                {"type": "text", "text": "Describe this image."},
+            ],
+        }
+    ]
+
+    # Preparation for inference
+    text = processor.apply_chat_template(
+        messages, tokenize=False, add_generation_prompt=True
+    )
+    image_inputs, video_inputs = process_vision_info(messages)
+    inputs = processor(
+        text=[text],
+        images=image_inputs,
+        videos=video_inputs,
+        padding=True,
+        return_tensors="pt",
+    )
+    inputs = inputs.to("cuda")
+
+    # Inference: Generation of the output
+    generated_ids = model.generate(**inputs, max_new_tokens=128)
+    generated_ids_trimmed = [
+        out_ids[len(in_ids) :] for in_ids, out_ids in zip(inputs.input_ids, generated_ids)
+    ]
+    output_text = processor.batch_decode(
+        generated_ids_trimmed, skip_special_tokens=True, clean_up_tokenization_spaces=False
+    )
+
+    output = output_text[0].strip().split("\n")
+
+    # free CUDA memory
+    del inputs, generated_ids, generated_ids_trimmed
+    torch.cuda.empty_cache()
+
+    return output
+
 if __name__ == "__main__":
 
     use_test = True # use the test folder examples
+    use_CoT = False # use chain of thought to break down the prompts?
 
     if use_test:
-        file_name = "test_image_input"
+        file_name = "apples"
         input_image = open(f'../test/{file_name}.jpg', 'rb')
-        with open('../test/prompt.txt', 'rb') as f:
+        with open(f'../test/{file_name}.txt', 'rb') as f:
             prompt = f.read()
-        output_dir = "../test/output_cot"
+        output_dir = f"../test/{file_name}"
 
-        subtasks = cot_subtasks(prompt)
-        for subtask in subtasks:
-            output_images = generate_image(input_image, subtask)
-            if type(output_images) is list:
-                input_image = output_images[0]
-            else:
-                input_image = output_images
+        if use_CoT:
+            subtasks = cot_subtasks(prompt)
         
-        save_images(file_name, output_images, output_dir)
+            # Qwen2VL-Flux
+            # for subtask in subtasks:
+            #     output_images = generate_image(input_image, subtask)
+            #     if type(output_images) is list:
+            #         input_image = output_images[0]
+            #     else:
+            #         input_image = output_images
+
+            # Qwen2.5VL
+            outputs = []
+            for subtask in subtasks:
+                subtask_output = answer(input_image, subtask)
+                outputs.append(subtask_output)
+
+        else:
+            output = answer(input_image, prompt)
+
+        # save output
+        with open(f'{output_dir}/{file_name}.txt', 'wb') as f:
+            f.write(output)
