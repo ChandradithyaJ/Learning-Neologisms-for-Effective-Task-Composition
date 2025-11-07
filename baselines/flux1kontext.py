@@ -1,8 +1,20 @@
 import torch
 from diffusers import FluxKontextPipeline
 from diffusers.utils import load_image
+from dotenv import load_dotenv
+import os
+# os.environ['HF_HOME'] = './checkpoints/flux1kontext'
 
-pipe = FluxKontextPipeline.from_pretrained("black-forest-labs/FLUX.1-Kontext-dev", torch_dtype=torch.bfloat16)
+# get the HuggingFace access token
+load_dotenv()
+hf_access_token = os.getenv("HF_ACCESS_TOKEN")
+
+pipe = FluxKontextPipeline.from_pretrained("black-forest-labs/FLUX.1-Kontext-dev", 
+    torch_dtype=torch.bfloat16,
+    token=hf_access_token,
+    cache_dir='../scratch/checkpoints/flux1kontext',
+    resume_download=True
+)
 pipe.to("cuda")
 
 def generate_image(input_image, prompt):
