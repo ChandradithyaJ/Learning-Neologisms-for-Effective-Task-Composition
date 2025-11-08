@@ -685,6 +685,12 @@ class FluxPipeline(DiffusionPipeline, FluxLoraLoaderMixin):
         num_warmup_steps = max(len(timesteps) - num_inference_steps * self.scheduler.order, 0)
         self._num_timesteps = len(timesteps)
 
+        # MEMORY OPTIMIZATION: Move VAE to CPU before denoising loop
+        vae_device = self.vae.device
+        vae_dtype = self.vae.dtype
+        self.vae.to('cpu')
+        torch.cuda.empty_cache()
+
         # 6. Denoising loop
         with self.progress_bar(total=num_inference_steps) as progress_bar:
             for i, t in enumerate(timesteps):
@@ -740,13 +746,26 @@ class FluxPipeline(DiffusionPipeline, FluxLoraLoaderMixin):
                 if XLA_AVAILABLE:
                     xm.mark_step()
 
+        # MEMORY OPTIMIZATION: Clear embeddings before VAE decode
+        del prompt_embeds, pooled_prompt_embeds, text_ids, latent_image_ids, self.transformer
+        if t5_prompt_embeds is not None:
+            del t5_prompt_embeds
+        torch.cuda.empty_cache()
+
         if output_type == "latent":
             image = latents
 
         else:
+            # MEMORY OPTIMIZATION: Move VAE back to GPU for decoding
+            self.vae.to(device=vae_device, dtype=vae_dtype)
+            
             latents = self._unpack_latents(latents, height, width, self.vae_scale_factor)
             latents = (latents / self.vae.config.scaling_factor) + self.vae.config.shift_factor
             image = self.vae.decode(latents, return_dict=False)[0]
+
+            del self.vae
+            torch.cuda.empty_cache()
+
             image = self.image_processor.postprocess(image, output_type=output_type)
 
         # Offload all models

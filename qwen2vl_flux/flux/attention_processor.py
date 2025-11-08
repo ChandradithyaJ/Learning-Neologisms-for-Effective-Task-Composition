@@ -1609,15 +1609,23 @@ class FluxAttnProcessor2_0:
             key = torch.cat([encoder_hidden_states_key_proj, key], dim=2)
             value = torch.cat([encoder_hidden_states_value_proj, value], dim=2)
 
+            del encoder_hidden_states_query_proj, encoder_hidden_states_key_proj, encoder_hidden_states_value_proj
+
         if image_rotary_emb is not None:
             from .embeddings import apply_rotary_emb
 
             query = apply_rotary_emb(query, image_rotary_emb)
             key = apply_rotary_emb(key, image_rotary_emb)
 
+        dtype = query.dtype
+        key = key.to(dtype)
+        value = value.to(dtype)
+
         hidden_states = F.scaled_dot_product_attention(query, key, value, dropout_p=0.0, is_causal=False)
+        del query, key, value
+
         hidden_states = hidden_states.transpose(1, 2).reshape(batch_size, -1, attn.heads * head_dim)
-        hidden_states = hidden_states.to(query.dtype)
+        hidden_states = hidden_states.to(dtype)
 
         if encoder_hidden_states is not None:
             encoder_hidden_states, hidden_states = (
@@ -1626,9 +1634,12 @@ class FluxAttnProcessor2_0:
             )
 
             # linear proj
-            hidden_states = attn.to_out[0](hidden_states)
+            if hidden_states.dtype != attn.to_out[0].weight.dtype:
+                hidden_states = hidden_states.to(dtype=attn.to_out[0].weight.dtype)
             # dropout
             hidden_states = attn.to_out[1](hidden_states)
+            if encoder_hidden_states.dtype != attn.to_add_out.weight.dtype:
+                encoder_hidden_states = encoder_hidden_states.to(dtype=attn.to_add_out.weight.dtype)
             encoder_hidden_states = attn.to_add_out(encoder_hidden_states)
 
             return hidden_states, encoder_hidden_states

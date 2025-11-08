@@ -178,7 +178,7 @@ class FluxSingleTransformerBlock(nn.Module):
         self.act_mlp = nn.GELU(approximate="tanh")
         self.proj_out = nn.Linear(dim + self.mlp_hidden_dim, dim)
 
-        processor = FluxSingleAttnProcessor2_0()
+        processor = FluxAttnProcessor2_0()
         self.attn = Attention(
             query_dim=dim,
             cross_attention_dim=None,
@@ -209,6 +209,8 @@ class FluxSingleTransformerBlock(nn.Module):
 
         hidden_states = torch.cat([attn_output, mlp_hidden_states], dim=2)
         gate = gate.unsqueeze(1)
+        if hidden_states.dtype != self.proj_out.weight.dtype:
+            hidden_states = hidden_states.to(dtype=self.proj_out.weight.dtype)
         hidden_states = gate * self.proj_out(hidden_states)
         hidden_states = residual + hidden_states
 

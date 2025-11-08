@@ -40,7 +40,7 @@ pip install -e .
 Create a `.env` and paste your HuggingFace token and the checkpoint directory location
 ```
 HF_ACCESS_TOKEN=<token>
-CHECKPOINT_DIR="./checkpoints/qwen2vl_flux"
+CHECKPOINT_DIR="../scratch/checkpoints/qwen2vl_flux"
 ```
 
 ## Test

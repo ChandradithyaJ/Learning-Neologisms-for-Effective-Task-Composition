@@ -147,10 +147,10 @@ if __name__ == "__main__":
 
     if use_test:
         file_name = "apples"
-        input_image = f'./test/{file_name}.jpg'
-        with open(f'./test/{file_name}.txt', 'r') as f:
+        input_image = f'./test/images/{file_name}.jpg'
+        with open(f'./test/prompts/{file_name}.txt', 'r') as f:
             prompt = f.read()
-        output_dir = f"./test/{file_name}"
+        output_dir = f"./test/output"
 
         if use_CoT:
             subtasks = cot_subtasks(prompt)
@@ -174,10 +174,5 @@ if __name__ == "__main__":
 
         # save output
         os.makedirs(output_dir, exist_ok=True)
-        with open(f'{output_dir}/output.txt', 'w') as f:
-            if use_CoT:
-                for i, subtask_output in enumerate(outputs):
-                    f.write(f"Subtask {i+1}:\n")
-                    f.write('\n'.join(subtask_output) + '\n\n')
-            else:
-                f.write('\n'.join(output))
+        with open(f'{output_dir}/{file_name}.txt', 'w') as f:
+            f.write(output)

@@ -50,6 +50,7 @@ MODEL_PATHS = {
 
 ASPECT_RATIOS = {
     "1:1": (1024, 1024),
+    "512x512": (512, 512),
     "16:9": (1344, 768),
     "9:16": (768, 1344),
     "2.4:1": (1536, 640),
@@ -106,12 +107,21 @@ class FluxModel:
     def _init_base_models(self):
         """Initialize the core models that are always needed"""
         # Qwen2VL and connector initialization
-        self.qwen2vl = Qwen2VLSimplifiedModel.from_pretrained(
-            MODEL_PATHS['qwen2vl'], 
-            torch_dtype=self.dtype
-        )
-        self.qwen2vl.requires_grad_(False).to(self.device)
 
+        # load_qwen2_connector()
+
+        # Text encoders initialization
+        # load_clip()
+        # load_t5()
+
+        # T5 context embedder
+        # load_t5_context()
+
+        # Basic components
+        # self.load_basics()
+
+    def load_qwen2_connector(self):
+        """Initialize Qwen2Connector"""
         self.connector = Qwen2Connector(input_dim=3584, output_dim=4096)
         connector_path = os.path.join(MODEL_PATHS['qwen2vl'], "connector.pt")
         if os.path.exists(connector_path):
@@ -120,29 +130,51 @@ class FluxModel:
             self.connector.load_state_dict(connector_state_dict)
         self.connector.to(self.dtype).to(self.device)
 
-        # Text encoders initialization
+    def offload_qwen2_connector(self):
+        """Delete Qwen2Connector to save memory"""
+        del self.connector
+        torch.cuda.empty_cache()
+
+    def load_clip(self):
         self.tokenizer = CLIPTokenizer.from_pretrained(MODEL_PATHS['flux'], subfolder="tokenizer")
         self.text_encoder = CLIPTextModel.from_pretrained(MODEL_PATHS['flux'], subfolder="text_encoder")
+        self.text_encoder.requires_grad_(False).to(self.dtype).to(self.device)
+
+    def offload_clip(self):
+        del self.tokenizer, self.text_encoder
+        torch.cuda.empty_cache()
+    
+    def load_t5(self):
         self.text_encoder_two = T5EncoderModel.from_pretrained(MODEL_PATHS['flux'], subfolder="text_encoder_2")
         self.tokenizer_two = T5TokenizerFast.from_pretrained(MODEL_PATHS['flux'], subfolder="tokenizer_2")
-
-        self.text_encoder.requires_grad_(False).to(self.dtype).to(self.device)
         self.text_encoder_two.requires_grad_(False).to(self.dtype).to(self.device)
 
-        # T5 context embedder
+    def offload_t5(self):
+        del self.text_encoder_two, self.tokenizer_two
+        torch.cuda.empty_cache()
+
+    def load_t5_context(self):
         self.t5_context_embedder = nn.Linear(4096, 3072)
         t5_embedder_path = os.path.join(MODEL_PATHS['qwen2vl'], "t5_embedder.pt")
         t5_embedder_state_dict = torch.load(t5_embedder_path, map_location=self.device, weights_only=True)
         self.t5_context_embedder.load_state_dict(t5_embedder_state_dict)
         self.t5_context_embedder.to(self.dtype).to(self.device)
 
-        # Basic components
+    def offload_t5_context(self):
+        del self.t5_context_embedder
+        torch.cuda.empty_cache()
+
+    def load_basics(self):
         self.noise_scheduler = FlowMatchEulerDiscreteScheduler.from_pretrained(MODEL_PATHS['flux'], subfolder="scheduler", shift=1)
         self.vae = AutoencoderKL.from_pretrained(MODEL_PATHS['flux'], subfolder="vae")
         self.transformer = FluxTransformer2DModel.from_pretrained(MODEL_PATHS['flux'], subfolder="transformer")
 
         self.vae.requires_grad_(False).to(self.dtype).to(self.device)
         self.transformer.requires_grad_(False).to(self.dtype).to(self.device)
+
+    def offload_basics(self):
+        del self.noise_scheduler, self.vae, self.transformer
+        torch.cuda.empty_cache()
 
     def _init_controlnet(self):
         """Initialize ControlNet model"""
@@ -279,11 +311,13 @@ class FluxModel:
         return qwen2_2d_image_embedding.view(1, -1, qwen2_2d_image_embedding.size(3))
 
     def compute_text_embeddings(self, prompt):
+        self.load_clip()
         with torch.no_grad():
             text_inputs = self.tokenizer(prompt, padding="max_length", max_length=77, truncation=True, return_tensors="pt")
             text_input_ids = text_inputs.input_ids.to(self.device)
             prompt_embeds = self.text_encoder(text_input_ids, output_hidden_states=False)
             pooled_prompt_embeds = prompt_embeds.pooler_output
+        self.offload_clip()
         return pooled_prompt_embeds.to(self.dtype)
 
     def compute_t5_text_embeddings(
@@ -293,6 +327,7 @@ class FluxModel:
         num_images_per_prompt=1,
         device=None,
     ):
+        self.load_t5()
         prompt = [prompt] if isinstance(prompt, str) else prompt
         batch_size = len(prompt)
 
@@ -311,6 +346,8 @@ class FluxModel:
         dtype = self.text_encoder_two.dtype
         prompt_embeds = prompt_embeds.to(dtype=dtype, device=device)
 
+        self.offload_t5()
+
         _, seq_len, _ = prompt_embeds.shape
 
         # duplicate text embeddings and attention mask for each generation per prompt, using mps friendly method
@@ -320,6 +357,12 @@ class FluxModel:
         return prompt_embeds
 
     def process_image(self, image):
+        self.qwen2vl = Qwen2VLSimplifiedModel.from_pretrained(
+            MODEL_PATHS['qwen2vl'], 
+            torch_dtype=self.dtype
+        )
+        self.qwen2vl.requires_grad_(False).to(self.device)
+
         message = [
             {
                 "role": "user",
@@ -335,6 +378,9 @@ class FluxModel:
             inputs = self.qwen2vl_processor(text=[text], images=[image], padding=True, return_tensors="pt").to(self.device)
             output_hidden_state, image_token_mask, image_grid_thw = self.qwen2vl(**inputs)
             image_hidden_state = output_hidden_state[image_token_mask].view(1, -1, output_hidden_state.size(-1))
+
+        del self.qwen2vl_processor, self.qwen2vl
+        torch.cuda.empty_cache()
 
         return image_hidden_state, image_grid_thw
 
@@ -401,7 +447,10 @@ class FluxModel:
         if prompt != "":
             self.qwen2vl_processor = AutoProcessor.from_pretrained(MODEL_PATHS['qwen2vl'], min_pixels=256*28*28, max_pixels=256*28*28)
             t5_prompt_embeds = self.compute_t5_text_embeddings(prompt=prompt, device=self.device)
+
+            self.load_t5_context()
             t5_prompt_embeds = self.t5_context_embedder(t5_prompt_embeds)
+            self.offload_t5_context()
         else:
             self.qwen2vl_processor = AutoProcessor.from_pretrained(MODEL_PATHS['qwen2vl'], min_pixels=512*28*28, max_pixels=512*28*28)
 
@@ -410,7 +459,9 @@ class FluxModel:
         if mode == "variation":
             if center_x is not None and center_y is not None and radius is not None:
                 qwen2_hidden_state_a = self.apply_attention(qwen2_hidden_state_a, image_grid_thw_a, center_x, center_y, radius)
+            self.load_qwen2_connector()
             qwen2_hidden_state_a = self.connector(qwen2_hidden_state_a)
+            self.offload_qwen2_connector()
 
         if mode == "img2img" or mode == "inpaint":
             if input_image_b:
@@ -435,7 +486,15 @@ class FluxModel:
         # IMAGE GENERATION
         #############################
         if mode == "variation":
+            # some preprocessing and clean up
+            repeated_prompt_embeds = qwen2_hidden_state_a.repeat(batch_size, 1, 1)
+            repeated_t5_embeds = t5_prompt_embeds.repeat(batch_size, 1, 1) if t5_prompt_embeds is not None else None
+            del qwen2_hidden_state_a, image_grid_thw_a, t5_prompt_embeds
+            torch.cuda.empty_cache()
+
             # Initialize different pipelines
+            self.load_clip()
+            self.load_basics()
             pipeline = FluxPipeline(
                 transformer=self.transformer,
                 scheduler=self.noise_scheduler,
@@ -443,10 +502,12 @@ class FluxModel:
                 text_encoder=self.text_encoder,
                 tokenizer=self.tokenizer,
             )
+            self.offload_clip()
+            self.offload_basics()
 
             gen_images = pipeline(
-                prompt_embeds=qwen2_hidden_state_a.repeat(batch_size, 1, 1),
-                t5_prompt_embeds=t5_prompt_embeds.repeat(batch_size, 1, 1) if t5_prompt_embeds is not None else None,
+                prompt_embeds=repeated_prompt_embeds,
+                t5_prompt_embeds=repeated_t5_embeds,
                 pooled_prompt_embeds=pooled_prompt_embeds,
                 num_inference_steps=num_inference_steps,
                 guidance_scale=guidance_scale,
