@@ -25,8 +25,8 @@ def generate_image(input_image, prompt):
         prompt=prompt,
         mode="variation",
         guidance_scale=7.5,
-        num_inference_steps=20,
-        aspect_ratio="512x512"
+        num_inference_steps=28,
+        aspect_ratio="784x784"
     )
     return outputs[0]
 

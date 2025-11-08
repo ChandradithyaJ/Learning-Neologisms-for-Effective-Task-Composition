@@ -427,9 +427,9 @@ def apply_rotary_emb(
     """
     # MEMORY OPTIMIZATION: Work with original dtype when possible
     original_dtype = x.dtype
-    # Only convert to float if necessary (not already float32/float64)
-    if original_dtype not in [torch.float32, torch.float64]:
-        x = x.float()
+    # # Only convert to float if necessary (not already float32/float64)
+    # if original_dtype not in [torch.float32, torch.float64]:
+    #     x = x.float()
 
     if use_real:
         cos, sin = freqs_cis  # [S, D]

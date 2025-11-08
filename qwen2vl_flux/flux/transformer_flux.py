@@ -209,8 +209,8 @@ class FluxSingleTransformerBlock(nn.Module):
 
         hidden_states = torch.cat([attn_output, mlp_hidden_states], dim=2)
         gate = gate.unsqueeze(1)
-        if hidden_states.dtype != self.proj_out.weight.dtype:
-            hidden_states = hidden_states.to(dtype=self.proj_out.weight.dtype)
+        # if hidden_states.dtype != self.proj_out.weight.dtype:
+        #     hidden_states = hidden_states.to(dtype=self.proj_out.weight.dtype)
         hidden_states = gate * self.proj_out(hidden_states)
         hidden_states = residual + hidden_states
 
