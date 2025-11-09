@@ -32,7 +32,7 @@ def generate_image(input_image, prompt):
 
 def save_images(prefix, image, output_dir):
     os.makedirs(output_dir, exist_ok=True)
-    output_path = os.path.join(output_dir, f"{prefix}.png")
+    output_path = os.path.join(output_dir, f"{prefix}.jpg")
     image.save(output_path)
     print(f"Saved image to {output_path}")
 
