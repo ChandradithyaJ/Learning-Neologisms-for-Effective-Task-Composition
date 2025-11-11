@@ -3,17 +3,21 @@ from diffusers import FluxKontextPipeline
 from diffusers.utils import load_image
 from dotenv import load_dotenv
 import os
-# os.environ['HF_HOME'] = './checkpoints/flux1kontext'
+from PIL import Image
 
 # get the HuggingFace access token
 load_dotenv()
 hf_access_token = os.getenv("HF_ACCESS_TOKEN")
 
-pipe = FluxKontextPipeline.from_pretrained("black-forest-labs/FLUX.1-Kontext-dev", 
+# pipe = FluxKontextPipeline.from_pretrained("black-forest-labs/FLUX.1-Kontext-dev", 
+#     torch_dtype=torch.bfloat16,
+#     token=hf_access_token,
+#     cache_dir='../scratch/checkpoints/flux1kontext',
+# )
+pipe = FluxKontextPipeline.from_pretrained("kpsss34/FLUX.1-Kontext-dev-int4", 
     torch_dtype=torch.bfloat16,
     token=hf_access_token,
-    cache_dir='../scratch/checkpoints/flux1kontext',
-    resume_download=True
+    cache_dir='../scratch/checkpoints/flux1kontext-int4'
 )
 pipe.to("cuda")
 
@@ -22,8 +26,8 @@ def generate_image(input_image, prompt):
         image=input_image,
         prompt=prompt,
         guidance_scale=2.5
-    ).images[0]
-    return output_image
+    ).images
+    return output_images
 
 def save_images(prefix, images, output_dir):
     os.makedirs(output_dir, exist_ok=True)
@@ -38,10 +42,10 @@ if __name__ == "__main__":
 
     if use_test:
         file_name = "test_image_input"
-        input_image = open(f'../test/{file_name}.jpg', 'rb')
-        with open('../test/prompt.txt', 'rb') as f:
+        input_image = Image.open(f'./test/images/{file_name}.jpg')
+        with open(f'./test/prompts/{file_name}.txt', 'r') as f:
             prompt = f.read()
-        output_dir = "../test/output"
+        output_dir = "./test/output"
 
         output_images = generate_image(input_image, prompt)
         save_images(file_name, output_images, output_dir)

@@ -1,13 +1,16 @@
 from transformers import Qwen2_5_VLForConditionalGeneration, AutoTokenizer, AutoProcessor
 from qwen_vl_utils import process_vision_info
+from qwen2vl_flux_query import generate_image, save_images
 import torch
 import os
+from PIL import Image
+import random
 
-cache_directory = "..scratch/checkpoints/qwen2_5vl"
+cache_directory = "../scratch/checkpoints/qwen2_5vl"
 
 cot_system_prompt = """
     System Prompts:
-    Q:= Let the cellphone screen be blue and Let the laptop be black
+    Q:= Let the cellphone screen be blue and let the laptop be black
     A:= 1) Let the cellphone screen be blue
         2) Let the laptop be black
     Q:= Add a bullet train and a bear and remove the boards
@@ -20,19 +23,6 @@ cot_system_prompt = """
         3) The hand could be holding a cup.
     Just give the points and do not include question prompt and A:= tag.
     """
-
-# default: Load the model on the available device(s)
-model = Qwen2_5_VLForConditionalGeneration.from_pretrained(
-    "Qwen/Qwen2.5-VL-7B-Instruct",
-    torch_dtype="auto",
-    device_map="auto",
-    cache_dir=cache_directory
-)
-# default processer
-processor = AutoProcessor.from_pretrained(
-    "Qwen/Qwen2.5-VL-7B-Instruct",
-    cache_dir=cache_directory
-)
 
 # The default range for the number of visual tokens per image in the model is 4-16384.
 # You can set min_pixels and max_pixels according to your needs, such as a token range of 256-1280, to balance performance and cost.
@@ -50,6 +40,19 @@ processor = AutoProcessor.from_pretrained(
 
 def cot_subtasks(prompt):
     initial_prompt = f"""Main Task: {prompt}\nBreak this task into a list of smaller subtasks. Give only the names of the smaller subtasks and not any description of that subtask. Just give the subtasks in as least number of points as possible. Give the answer following the pattern given in System Prompts without the <A:=>.\n"""
+
+    # default: Load the model on the available device(s)
+    model = Qwen2_5_VLForConditionalGeneration.from_pretrained(
+        "Qwen/Qwen2.5-VL-7B-Instruct",
+        torch_dtype="auto",
+        device_map="auto",
+        cache_dir=cache_directory
+    )
+    # default processor
+    processor = AutoProcessor.from_pretrained(
+        "Qwen/Qwen2.5-VL-7B-Instruct",
+        cache_dir=cache_directory
+    )
 
     modified_prompt = cot_system_prompt + "\n" + initial_prompt
 
@@ -90,7 +93,7 @@ def cot_subtasks(prompt):
     list_length = len(subtasks)
 
     # free CUDA memory
-    del inputs, generated_ids, generated_ids_trimmed
+    del model, processor, inputs, generated_ids, generated_ids_trimmed, output_text, image_inputs, video_inputs
     torch.cuda.empty_cache()
 
     return subtasks
@@ -143,36 +146,36 @@ def answer(image_path, prompt):
 if __name__ == "__main__":
 
     use_test = True # use the test folder examples
-    use_CoT = False # use chain of thought to break down the prompts?
 
     if use_test:
-        file_name = "apples"
-        input_image = f'./test/images/{file_name}.jpg'
+        file_name = "test_image_input"
+        input_image = Image.open(f'./test/images/{file_name}.jpg')
         with open(f'./test/prompts/{file_name}.txt', 'r') as f:
             prompt = f.read()
-        output_dir = f"./test/output"
+        output_dir = f"./test/cot_output"
+        os.makedirs(output_dir, exist_ok=True)
 
-        if use_CoT:
-            subtasks = cot_subtasks(prompt)
-        
-            # Qwen2VL-Flux
-            # for subtask in subtasks:
-            #     output_images = generate_image(input_image, subtask)
-            #     if type(output_images) is list:
-            #         input_image = output_images[0]
-            #     else:
-            #         input_image = output_images
+        subtasks = cot_subtasks(prompt)
+        print(subtasks)
+    
+        # Qwen2VL-Flux
+        for i, subtask in enumerate(subtasks):
+            output_images = generate_image(input_image, subtask)
 
-            # Qwen2.5VL
-            outputs = []
-            for subtask in subtasks:
-                subtask_output = answer(input_image, subtask)
-                outputs.append(subtask_output)
+            random_idx = random.randint(0, len(output_images)-1)
+            input_image = output_images[random_idx]
+            torch.cuda.empty_cache()
 
-        else:
-            output = answer(input_image, prompt)
+            # save intermediate images
+            save_images(f'{file_name}_step{i+1}', output_images, output_dir)
+
+        # Qwen2.5VL
+        # outputs = []
+        # for subtask in subtasks:
+        #     subtask_output = answer(input_image, subtask)
+        #     outputs.append(subtask_output)
 
         # save output
-        os.makedirs(output_dir, exist_ok=True)
-        with open(f'{output_dir}/{file_name}.txt', 'w') as f:
-            f.write(output)
+        # Qwen2.5VL
+        # with open(f'{output_dir}/{file_name}.txt', 'w') as f:
+        #     f.write(output)

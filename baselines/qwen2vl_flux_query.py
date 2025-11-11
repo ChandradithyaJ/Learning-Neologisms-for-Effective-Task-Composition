@@ -15,11 +15,14 @@ snapshot_download("Djrango/Qwen2vl-Flux",
     local_dir="../scratch/checkpoints/qwen2vl_flux"
 )
 
-# instantiate the model
-model = FluxModel(device="cuda")
+structural_prompt = "Keep all other elements, composition, and style unchanged."
 
 def generate_image(input_image, prompt):
     # Text-Guided Blending mode of Qwen2VL-Flux
+    complete_prompt = prompt + " " + structural_prompt
+    model = FluxModel(device="cuda")
+    torch.cuda.empty_cache()
+    
     outputs = model.generate(
         input_image_a=input_image,
         prompt=prompt,
@@ -28,13 +31,19 @@ def generate_image(input_image, prompt):
         num_inference_steps=28,
         aspect_ratio="784x784"
     )
-    return outputs[0]
 
-def save_images(prefix, image, output_dir):
+    # free up CUDA memory
+    del model
+    torch.cuda.empty_cache()
+
+    return outputs
+
+def save_images(prefix, images, output_dir):
     os.makedirs(output_dir, exist_ok=True)
-    output_path = os.path.join(output_dir, f"{prefix}.jpg")
-    image.save(output_path)
-    print(f"Saved image to {output_path}")
+    for i, image in enumerate(images):
+        output_path = os.path.join(output_dir, f"{prefix}_sample{i}.jpg")
+        image.save(output_path)
+        print(f"Saved image to {output_path}")
 
 if __name__ == "__main__":
     use_test = True # use the test folder examples
@@ -46,5 +55,5 @@ if __name__ == "__main__":
             prompt = f.read()
         output_dir = "./test/output"
 
-        output_image = generate_image(input_image, prompt)
-        save_images(file_name, output_image, output_dir)
+        output_images = generate_image(input_image, prompt)
+        save_images(file_name, output_images, output_dir)
