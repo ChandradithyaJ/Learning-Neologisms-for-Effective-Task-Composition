@@ -3,3 +3,6 @@ git+https://github.com/huggingface/diffusers.git
 git+https://github.com/huggingface/transformers.git@v4.49.0
 qwen_vl_utils
 bitsandbytes
+peft
+xformers
+torchvision==0.23.0

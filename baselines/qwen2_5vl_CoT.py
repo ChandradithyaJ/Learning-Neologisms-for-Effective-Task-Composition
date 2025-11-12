@@ -1,9 +1,7 @@
 from transformers import Qwen2_5_VLForConditionalGeneration, AutoTokenizer, AutoProcessor
 from qwen_vl_utils import process_vision_info
-from qwen2vl_flux_query import generate_image, save_images
 import torch
 import os
-from PIL import Image
 import random
 
 cache_directory = "../scratch/checkpoints/qwen2_5vl"
@@ -98,84 +96,14 @@ def cot_subtasks(prompt):
 
     return subtasks
 
-def answer(image_path, prompt):
-    messages = [
-        {
-            "role": "user",
-            "content": [
-                {
-                    "type": "image",
-                    "image": image_path,
-                },
-                {"type": "text", "text": prompt},
-            ],
-        }
-    ]
-
-    # Preparation for inference
-    text = processor.apply_chat_template(
-        messages, tokenize=False, add_generation_prompt=True
-    )
-    image_inputs, video_inputs = process_vision_info(messages)
-    inputs = processor(
-        text=[text],
-        images=image_inputs,
-        videos=video_inputs,
-        padding=True,
-        return_tensors="pt",
-    )
-    inputs = inputs.to("cuda")
-
-    # Inference: Generation of the output
-    generated_ids = model.generate(**inputs, max_new_tokens=128)
-    generated_ids_trimmed = [
-        out_ids[len(in_ids) :] for in_ids, out_ids in zip(inputs.input_ids, generated_ids)
-    ]
-    output_text = processor.batch_decode(
-        generated_ids_trimmed, skip_special_tokens=True, clean_up_tokenization_spaces=False
-    )
-
-    output = output_text[0].strip().split("\n")
-
-    # free CUDA memory
-    del inputs, generated_ids, generated_ids_trimmed
-    torch.cuda.empty_cache()
-
-    return output
-
 if __name__ == "__main__":
 
     use_test = True # use the test folder examples
 
     if use_test:
         file_name = "test_image_input"
-        input_image = Image.open(f'./test/images/{file_name}.jpg')
         with open(f'./test/prompts/{file_name}.txt', 'r') as f:
             prompt = f.read()
-        output_dir = f"./test/cot_output"
-        os.makedirs(output_dir, exist_ok=True)
 
         subtasks = cot_subtasks(prompt)
         print(subtasks)
-    
-        # Qwen2VL-Flux
-        for i, subtask in enumerate(subtasks):
-            output_images = generate_image(input_image, subtask)
-
-            random_idx = random.randint(0, len(output_images)-1)
-            input_image = output_images[random_idx]
-            torch.cuda.empty_cache()
-
-            # save intermediate images
-            save_images(f'{file_name}_step{i+1}', output_images, output_dir)
-
-        # Qwen2.5VL
-        # outputs = []
-        # for subtask in subtasks:
-        #     subtask_output = answer(input_image, subtask)
-        #     outputs.append(subtask_output)
-
-        # save output
-        # Qwen2.5VL
-        # with open(f'{output_dir}/{file_name}.txt', 'w') as f:
-        #     f.write(output)
