@@ -208,6 +208,9 @@ def qwen_edit_forward(
             max_sequence_length=max_sequence_length,
         )
 
+    del prompt_image
+    torch.cuda.empty_cache()
+
     # ---------- 4b. Inject neologism embedding into prompt_embeds ----------
     # IMPORTANT: This happens outside any @torch.no_grad, so it is differentiable
     # w.r.t. and_neologism_emb even if encode_prompt was not.
@@ -274,6 +277,9 @@ def qwen_edit_forward(
         print("[DEBUG] prompt_embeds.requires_grad:", prompt_embeds.requires_grad)
         print("[DEBUG] and_neologism_emb.requires_grad:", and_neologism_emb.requires_grad)
 
+        del mask, mask_f, input_ids, encoded
+        torch.cuda.empty_cache()
+
 
     # ---------- 5. Prepare latents ----------
     num_channels_latents = pipe.transformer.config.in_channels // 4
@@ -288,6 +294,8 @@ def qwen_edit_forward(
         generator,
         latents,
     )
+    del image
+    torch.cuda.empty_cache()
 
     img_shapes = [
         [
@@ -392,11 +400,20 @@ def qwen_edit_forward(
                 noise_norm = torch.norm(comb_pred, dim=-1, keepdim=True)
                 noise_pred = comb_pred * (cond_norm / noise_norm)
 
+                del neg_noise_pred, comb_pred, cond_norm, noise_norm
+                torch.cuda.empty_cache()
+
+
             latents_dtype = latents.dtype
             latents = pipe.scheduler.step(noise_pred, t, latents, return_dict=False)[0]
 
             if latents.dtype != latents_dtype:
                 latents = latents.to(latents_dtype)
+
+            del noise_pred, timestep
+
+            if i % 2 == 0:
+                torch.cuda.empty_cache()
 
             if callback_on_step_end is not None:
                 callback_kwargs = {}
@@ -411,6 +428,10 @@ def qwen_edit_forward(
                 progress_bar.update()
 
     pipe._current_timestep = None
+
+    if image_latents is not None:
+        del image_latents
+    torch.cuda.empty_cache()
 
     # ---------- 9. Output ----------
 

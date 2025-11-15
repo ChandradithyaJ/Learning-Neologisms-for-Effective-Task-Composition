@@ -1,8 +1,10 @@
 import os
+os.environ['PYTORCH_CUDA_ALLOC_CONF'] = 'expandable_segments:True'
 import io
 import gc
 import ast
 from typing import List
+from dotenv import load_dotenv
 
 import pandas as pd
 import torch
@@ -13,23 +15,24 @@ from diffusers import QwenImageEditPipeline
 
 from qwen_diff_train_forward import qwen_edit_forward  # your custom forward
 
+from torch.cuda.amp import autocast, GradScaler
+scaler = GradScaler()
+
 
 # ===========================
 # 0) Config
 # ===========================
-MODEL_PATH = "ovedrive/qwen-image-edit-4bit"
+load_dotenv()
+DATASET_PATH = os.getenv("DATASET_PATH")
 
-DATA_CSV = (
-    "/users/aparasel/scratch/Multitask-Image-Editing-via-Neologisms-and-Textual-Inversion/"
-    "data/filtered_dataset.csv"
-)
+MODEL_PATH = "ovedrive/qwen-image-edit-4bit"
 
 # "Neologism" will be tied to the existing word "and"
 TARGET_WORDS = [" and"]
 
 LR = 3e-4          # instead of 1e-2
 EPOCHS = 1                   # number of passes over df
-STEPS_PER_IMAGE = 1          # gradient steps per row
+STEPS_PER_IMAGE = 2          # gradient steps per row
 
 # *** SMALLER SETTINGS FOR TRAINING ***
 HEIGHT = 256                 # was 512 — smaller to avoid OOM
@@ -40,10 +43,10 @@ GUIDANCE = 1.0               # true_cfg_scale; 1.0 => no CFG in training
 MAX_TRAIN_IMAGES = 2         # cap for debug; set None for full df
 
 # Use reject image as negative example?
-USE_REJECT = False #SHOULD BE TRUE FOR TRUE NEOLOGISMS 
-REJECT_LAMBDA = 0.05          # weight for pushing away from reject_img
+USE_REJECT = True # SHOULD BE TRUE FOR TRUE NEOLOGISMS 
+REJECT_LAMBDA = 0.05 # weight for pushing away from reject_img
 
-SAVE_DIR = "./outputs_neologism_and"
+SAVE_DIR = "./Neologism_training/outputs_neologism_and"
 os.makedirs(SAVE_DIR, exist_ok=True)
 
 device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -250,63 +253,75 @@ def train_on_df(df: pd.DataFrame, epochs: int = EPOCHS, steps_per_image: int = S
                     opt.zero_grad(set_to_none=True)
 
                     # --- Forward with gradients through 'and' embedding ---
-                    out = qwen_edit_forward(
-                        pipeline,
-                        image=src_img,
-                        prompt=prompt,
-                        negative_prompt=None,
-                        num_inference_steps=NUM_STEPS_TRAIN,   # small, e.g. 1–4
-                        true_cfg_scale=GUIDANCE,               # 1.0 => no CFG
-                        height=HEIGHT,
-                        width=WIDTH,
-                        output_type="latent",
-                        return_dict=True,
-                        and_neologism_emb=and_neologism_emb,
-                        target_token_ids=target_token_ids,
-                    )
-                    gen_lat = out.images  # (1, C, H', W')
+                    torch.cuda.empty_cache()
 
-                    # Check for NaNs / inf in generated latents
-                    if not torch.isfinite(gen_lat).all():
-                        print(f"[WARN] Row {idx}, step {step}: non-finite gen_lat; skipping update.")
-                        continue
+                    with autocast(dtype=torch.float16):
+                        out = qwen_edit_forward(
+                            pipeline,
+                            image=src_img,
+                            prompt=prompt,
+                            negative_prompt=None,
+                            num_inference_steps=NUM_STEPS_TRAIN,   # small, e.g. 1–4
+                            true_cfg_scale=GUIDANCE,               # 1.0 => no CFG
+                            height=HEIGHT,
+                            width=WIDTH,
+                            output_type="latent",
+                            return_dict=True,
+                            and_neologism_emb=and_neologism_emb,
+                            target_token_ids=target_token_ids,
+                        )
+                        gen_lat = out.images  # (1, C, H', W')
+                        del out
+                        torch.cuda.empty_cache()
 
-                    # Match dtype & crop
-                    gen_lat = gen_lat.to(dtype=tgt_lat.dtype)
+                        # Check for NaNs / inf in generated latents
+                        if not torch.isfinite(gen_lat).all():
+                            print(f"[WARN] Row {idx}, step {step}: non-finite gen_lat; skipping update.")
+                            continue
 
-                    min_c = min(gen_lat.shape[1], tgt_lat.shape[1])
-                    min_h = min(gen_lat.shape[-2], tgt_lat.shape[-2])
-                    min_w = min(gen_lat.shape[-1], tgt_lat.shape[-1])
+                        # Match dtype & crop
+                        gen_lat = gen_lat.to(dtype=tgt_lat.dtype)
 
-                    gl = gen_lat[:, :min_c, :min_h, :min_w]
-                    tl = tgt_lat[:, :min_c, :min_h, :min_w]
+                        min_c = min(gen_lat.shape[1], tgt_lat.shape[1])
+                        min_h = min(gen_lat.shape[-2], tgt_lat.shape[-2])
+                        min_w = min(gen_lat.shape[-1], tgt_lat.shape[-1])
 
-                    # Sanity on targets
-                    if not torch.isfinite(tl).all():
-                        print(f"[WARN] Row {idx}, step {step}: non-finite tgt_lat; skipping.")
-                        continue
+                        gl = gen_lat[:, :min_c, :min_h, :min_w]
+                        tl = tgt_lat[:, :min_c, :min_h, :min_w]
 
-                    loss_pos = F.mse_loss(gl, tl)
+                        # Sanity on targets
+                        if not torch.isfinite(tl).all():
+                            print(f"[WARN] Row {idx}, step {step}: non-finite tgt_lat; skipping.")
+                            continue
 
-                    # Optional reject latent loss
-                    loss_neg = None
-                    if USE_REJECT and (reject_lat is not None):
-                        rl = reject_lat[:, :min_c, :min_h, :min_w]
-                        if torch.isfinite(rl).all():
-                            loss_neg = F.mse_loss(gl, rl)
-                            loss = loss_pos - REJECT_LAMBDA * loss_neg
+                        loss_pos = F.mse_loss(gl, tl)
+                        del tl
+
+                        # Optional reject latent loss
+                        loss_neg = None
+                        if USE_REJECT and (reject_lat is not None):
+                            rl = reject_lat[:, :min_c, :min_h, :min_w]
+                            if torch.isfinite(rl).all():
+                                loss_neg = F.mse_loss(gl, rl)
+                                loss = loss_pos - REJECT_LAMBDA * loss_neg
+                            else:
+                                print(f"[WARN] Row {idx}, step {step}: non-finite reject_lat; ignoring reject term.")
+                                loss = loss_pos
+                            del rl
                         else:
-                            print(f"[WARN] Row {idx}, step {step}: non-finite reject_lat; ignoring reject term.")
                             loss = loss_pos
-                    else:
-                        loss = loss_pos
+                        torch.cuda.empty_cache()
 
-                    # Loss must be finite
-                    if not torch.isfinite(loss):
-                        print(f"[WARN] Row {idx}, step {step}: non-finite loss; skipping.")
-                        continue
+                        # Loss must be finite
+                        if not torch.isfinite(loss):
+                            print(f"[WARN] Row {idx}, step {step}: non-finite loss; skipping.")
+                            continue
 
-                    loss.backward()
+                    scaler.scale(loss).backward()
+                    # loss.backward()
+
+                    del loss
+                    torch.cuda.empty_cache()
 
                     # Guard gradient on the neologism embedding
                     if and_neologism_emb.grad is None or not torch.isfinite(and_neologism_emb.grad).all():
@@ -316,9 +331,19 @@ def train_on_df(df: pd.DataFrame, epochs: int = EPOCHS, steps_per_image: int = S
                         continue
 
                     # Gradient clipping for stability
-                    torch.nn.utils.clip_grad_norm_([and_neologism_emb], max_norm=1.0)
+                    # torch.nn.utils.clip_grad_norm_([and_neologism_emb], max_norm=1.0)
 
-                    opt.step()
+                    # opt.step()
+
+                    # Unscale before gradient clipping
+                    scaler.unscale_(opt)
+                    torch.nn.utils.clip_grad_norm_([and_neologism_emb], max_norm=1.0)
+                    
+                    # Scaled optimizer step
+                    scaler.step(opt)
+                    scaler.update()
+
+                    torch.cuda.empty_cache()
 
                 # 5) Logging
                 if (idx + 1) % 5 == 0:
@@ -345,7 +370,7 @@ def train_on_df(df: pd.DataFrame, epochs: int = EPOCHS, steps_per_image: int = S
                         img_preview.save(os.path.join(SAVE_DIR, f"train_preview_{idx:05d}.png"))
 
                 # 7) Cleanup
-                del tgt_lat, gen_lat, out
+                del tgt_lat, gen_lat
                 if reject_lat is not None:
                     del reject_lat
                 gc.collect()
@@ -395,7 +420,7 @@ def evaluate_and_save(df: pd.DataFrame, subdir: str = "eval"):
 # 6) Main
 # ===========================
 if __name__ == "__main__":
-    df = pd.read_csv(DATA_CSV)
+    df = pd.read_csv(DATASET_PATH)
     required_cols = {"source_img", "target_img", "reject_img", "instruction"}
     missing = required_cols - set(df.columns)
     assert not missing, f"Missing required columns: {missing}"

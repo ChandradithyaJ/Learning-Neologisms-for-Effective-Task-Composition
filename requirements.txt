@@ -5,3 +5,5 @@ git+https://github.com/huggingface/diffusers.git
 transformers==4.57.1
 qwen_vl_utils
 bitsandbytes
+pandas
+pytorch-ignite==0.5.3
