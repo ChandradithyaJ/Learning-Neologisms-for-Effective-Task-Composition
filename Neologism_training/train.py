@@ -1,5 +1,6 @@
 import os
-os.environ['PYTORCH_CUDA_ALLOC_CONF'] = 'expandable_segments:True'
+os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
+
 import io
 import gc
 import ast
@@ -15,36 +16,36 @@ from diffusers import QwenImageEditPipeline
 
 from qwen_diff_train_forward import qwen_edit_forward  # your custom forward
 
-from torch.cuda.amp import autocast, GradScaler
-scaler = GradScaler()
-
 
 # ===========================
-# 0) Config
+# 0) Config (A100 40GB)
 # ===========================
 load_dotenv()
-DATASET_PATH = os.getenv("DATASET_PATH")
+DATASET_PATH = "/content/sample_data/filtered_dataset.csv"
 
-MODEL_PATH = "ovedrive/qwen-image-edit-4bit"
+MODEL_PATH = "Qwen/Qwen-Image-Edit"  # non-4bit official base
 
-# "Neologism" will be tied to the existing word "and"
 TARGET_WORDS = [" and"]
 
-LR = 3e-4          # instead of 1e-2
-EPOCHS = 1                   # number of passes over df
-STEPS_PER_IMAGE = 2          # gradient steps per row
+# Learning / schedule
+LR = 3e-4
+EPOCHS = 10
+STEPS_PER_IMAGE = 2   # safe on A100; bump to 3 if you want
 
-# *** SMALLER SETTINGS FOR TRAINING ***
-HEIGHT = 256                 # was 512 — smaller to avoid OOM
-WIDTH = 256
-NUM_STEPS_TRAIN = 4          # was 8 — fewer steps to save VRAM
-NUM_STEPS_EVAL  = 8          # can keep eval a bit higher; no grads
-GUIDANCE = 1.0               # true_cfg_scale; 1.0 => no CFG in training
-MAX_TRAIN_IMAGES = 2         # cap for debug; set None for full df
+# Resolution
+HEIGHT = 512
+WIDTH  = 512
 
-# Use reject image as negative example?
-USE_REJECT = True # SHOULD BE TRUE FOR TRUE NEOLOGISMS 
-REJECT_LAMBDA = 0.05 # weight for pushing away from reject_img
+# Denoising
+NUM_STEPS_TRAIN = 6   # 4–8 works well on A100
+NUM_STEPS_EVAL  = 15  # nicer previews (no grads)
+GUIDANCE = 1.0        # no CFG during training
+
+MAX_TRAIN_IMAGES = 50  # set int for debug
+
+# Reject loss
+USE_REJECT = True
+REJECT_LAMBDA = 0.05
 
 SAVE_DIR = "./Neologism_training/outputs_neologism_and"
 os.makedirs(SAVE_DIR, exist_ok=True)
@@ -52,173 +53,161 @@ os.makedirs(SAVE_DIR, exist_ok=True)
 device = "cuda" if torch.cuda.is_available() else "cpu"
 print("device:", device)
 
+# ✅ A100 supports bf16; use it always
+DTYPE = torch.bfloat16
+print("Using dtype:", DTYPE)
+
+
 # ===========================
 # 1) Load pipeline (frozen)
 # ===========================
 pipeline = QwenImageEditPipeline.from_pretrained(
     MODEL_PATH,
-    torch_dtype=torch.float16,   # good for Quadro RTX 6000
-)
-pipeline.to(device)
+    torch_dtype=DTYPE,
+    device_map=None,
+).to(device)
 
-# Light memory helpers
+# Memory helpers (lightweight, safe)
 if hasattr(pipeline, "enable_attention_slicing"):
     pipeline.enable_attention_slicing("max")
 if hasattr(pipeline, "vae") and hasattr(pipeline.vae, "enable_slicing"):
     pipeline.vae.enable_slicing()
 if hasattr(pipeline, "vae") and hasattr(pipeline.vae, "enable_tiling"):
     pipeline.vae.enable_tiling()
-if hasattr(pipeline, "enable_gradient_checkpointing"):
-    pipeline.enable_gradient_checkpointing()
+
+# ✅ Make checkpointing actually apply to denoiser
+if hasattr(pipeline, "transformer") and hasattr(pipeline.transformer, "enable_gradient_checkpointing"):
+    pipeline.transformer.enable_gradient_checkpointing()
+else:
+    try:
+        pipeline.transformer.gradient_checkpointing = True
+    except Exception:
+        pass
+
+# ✅ Efficient attention (SDPA by default on torch>=2)
+try:
+    if hasattr(pipeline.transformer, "set_attn_processor"):
+        pipeline.transformer.set_attn_processor("sdpa")
+except Exception:
+    pass
+
+# ✅ xFormers if installed (optional)
+try:
+    if hasattr(pipeline.transformer, "enable_xformers_memory_efficient_attention"):
+        pipeline.transformer.enable_xformers_memory_efficient_attention()
+except Exception:
+    pass
+
 
 tokenizer = pipeline.tokenizer
 text_encoder = pipeline.text_encoder
 vae = pipeline.vae
 
 # Freeze everything except our neologism embedding
-if hasattr(pipeline, "text_encoder"):
-    for p in pipeline.text_encoder.parameters():
-        p.requires_grad_(False)
+for module_name in ["text_encoder", "transformer", "vae", "image_encoder"]:
+    if hasattr(pipeline, module_name):
+        for p in getattr(pipeline, module_name).parameters():
+            p.requires_grad_(False)
 
-if hasattr(pipeline, "transformer"):
-    for p in pipeline.transformer.parameters():
-        p.requires_grad_(False)
-
-if hasattr(pipeline, "vae"):
-    for p in pipeline.vae.parameters():
-        p.requires_grad_(False)
-
-if hasattr(pipeline, "image_encoder"):
-    for p in pipeline.image_encoder.parameters():
-        p.requires_grad_(False)
 
 # ===========================
 # 2) Build neologism embedding for "and"
 # ===========================
 emb_layer = text_encoder.get_input_embeddings()
-D = emb_layer.weight.shape[-1]
 emb_dtype = emb_layer.weight.dtype
-print(f"Text embedding dim: {D}, dtype: {emb_dtype}")
+print(f"Text embedding dim: {emb_layer.weight.shape[-1]}, dtype: {emb_dtype}")
 
-# Get token ids for "and"/"And" (without adding new tokens)
 target_token_ids: List[int] = []
 with torch.no_grad():
     for w in TARGET_WORDS:
         out = tokenizer(w, add_special_tokens=False)
-        ids = out["input_ids"]
-        target_token_ids.extend(ids)
-
+        target_token_ids.extend(out["input_ids"])
 target_token_ids = sorted(set(target_token_ids))
 print(f"Target token IDs for {TARGET_WORDS}: {target_token_ids}")
 
-# Initialize neologism embedding from the average of these base IDs
 with torch.no_grad():
     base_vecs = emb_layer.weight[target_token_ids].to(device=device, dtype=emb_dtype)
     init_vec = base_vecs.mean(dim=0)
-    print(f"Initialized 'and' neologism embedding from {len(target_token_ids)} base subword vectors.")
+    orig_and_emb = init_vec.float().detach().clone().to(device)
+    print(f"Initialized neologism from {len(target_token_ids)} base vectors.")
 
-# This is the ONLY learnable parameter: the neologism embedding vector
-and_neologism_emb = nn.Parameter(init_vec.clone().detach())
+# ✅ Learn neologism in fp32 for stability, rest of model bf16
+and_neologism_emb = nn.Parameter(init_vec.float().clone().detach()).to(device)
 and_neologism_emb.requires_grad_(True)
 
 opt = torch.optim.AdamW([and_neologism_emb], lr=LR)
 
+
 # ===========================
-# 3) Utilities for data & tensors
+# 3) Utilities
 # ===========================
 def pil_from_bytes(b: bytes) -> Image.Image:
     return Image.open(io.BytesIO(b)).convert("RGB")
 
 def parse_img_field(value):
-    """
-    CSV stores things like "{'bytes': b'...'}" as strings.
-    This turns them back into dicts with a 'bytes' field.
-    """
     if isinstance(value, dict):
         return value
     if isinstance(value, str):
         return ast.literal_eval(value)
     raise TypeError(f"Unexpected type for image field: {type(value)}")
 
-def image_to_tensor(img: Image.Image) -> torch.Tensor:
-    """
-    Encode a PIL image to the same tensor space the pipeline uses when
-    output_type='pt'. Shape: (1, C, H, W).
-    """
-    img = img.resize((WIDTH, HEIGHT), Image.BICUBIC)
-
-    pixel = pipeline.image_processor.preprocess(img)
-    if not isinstance(pixel, torch.Tensor):
-        pixel = torch.tensor(pixel)
-
-    # Use same dtype as the main transformer / UNet
-    pipe_dtype = next(pipeline.transformer.parameters()).dtype
-    pixel = pixel.to(device=device, dtype=pipe_dtype)
-    return pixel
-
-
+@torch.no_grad()
 def image_to_latents(img: Image.Image) -> torch.Tensor:
-    """
-    Encode a PIL image to VAE latents compatible with QwenImageEditPipeline.
-    Returns latents of shape (1, C, H', W').
-    """
-    # Resize to match your diffusion resolution
     img = img.resize((WIDTH, HEIGHT), Image.BICUBIC)
 
-    # Use the pipeline's image_processor
     pixel = pipeline.image_processor.preprocess(img)
     if not isinstance(pixel, torch.Tensor):
         pixel = torch.tensor(pixel)
 
-    vae_dtype = next(vae.parameters()).dtype
-    pixel = pixel.to(device=device, dtype=vae_dtype)
-
-    # QwenImage VAE expects a frame dimension: (B, C, 1, H, W)
+    pixel = pixel.to(device=device, dtype=next(vae.parameters()).dtype)
     if pixel.ndim == 4:
         pixel = pixel.unsqueeze(2)
 
-    with torch.no_grad():
-        enc = vae.encode(pixel)
-        if hasattr(enc, "latent_dist"):
-            latents = enc.latent_dist.sample()
-        else:
-            latents = enc[0] if isinstance(enc, (tuple, list)) else enc
+    enc = vae.encode(pixel)
+    latents = enc.latent_dist.sample() if hasattr(enc, "latent_dist") else enc[0]
+    if latents.ndim == 5 and latents.shape[2] == 1:
+        latents = latents.squeeze(2)
 
-        # Remove dummy frame dimension if present
-        if latents.ndim == 5 and latents.shape[2] == 1:
-            latents = latents.squeeze(2)
-
-        # Standard SD-style scaling
-        latents = latents * 0.18215
-
-    return latents
+    return latents * 0.18215
 
 
-# ===========================
-# 4) Training loop
-# ===========================
+def save_neologism_checkpoint(epoch_idx: int):
+    """
+    Save the current neologism embedding (and metadata).
+    epoch_idx is 0-based; we’ll save using 1-based numbering in filename.
+    """
+    ckpt_path = os.path.join(SAVE_DIR, f"and_neologism_epoch_{epoch_idx+1:03d}.pt")
+    torch.save(
+        {
+            "target_words": TARGET_WORDS,
+            "token_ids": target_token_ids,
+            "embedding": and_neologism_emb.detach().cpu(),
+            "epoch": epoch_idx + 1,
+        },
+        ckpt_path,
+    )
+    print(f"[SAVE] Neologism checkpoint saved to {ckpt_path}")
+
+def neologism_distance_stats():
+    cur = and_neologism_emb.detach()
+    orig = orig_and_emb
+    l2_dist = torch.norm(cur - orig).item()
+    cosine_sim = F.cosine_similarity(cur.unsqueeze(0), orig.unsqueeze(0)).item()
+    return l2_dist, cosine_sim
+
 # ===========================
 # 4) Training loop (LATENT LOSS)
 # ===========================
 def train_on_df(df: pd.DataFrame, epochs: int = EPOCHS, steps_per_image: int = STEPS_PER_IMAGE):
-    """
-    Train the 'and' neologism embedding on the given dataframe, using *latent loss*.
-
-    Loss ≈ MSE(z_gen, z_target) - λ * MSE(z_gen, z_reject)
-    where z_* are VAE latents.
-    """
     n_rows = len(df)
 
     # One-time tokenizer sanity check
     first_prompt = str(df.iloc[0]["instruction"])
     enc = tokenizer(first_prompt, add_special_tokens=True)
-    ids = enc["input_ids"]
-    toks = tokenizer.convert_ids_to_tokens(ids)
     print("=== TOKENIZER SANITY CHECK ===")
     print("prompt:", first_prompt)
-    print("ids:", ids)
-    print("tokens:", toks)
-    print("TARGET_WORDS:", TARGET_WORDS)
+    print("ids:", enc["input_ids"])
+    print("tokens:", tokenizer.convert_ids_to_tokens(enc["input_ids"]))
     print("target_token_ids:", target_token_ids)
     print("================================")
 
@@ -226,43 +215,33 @@ def train_on_df(df: pd.DataFrame, epochs: int = EPOCHS, steps_per_image: int = S
         print(f"\n===== EPOCH {epoch + 1}/{epochs} =====")
 
         for idx, row in df.iterrows():
+            loss_pos = None
+            loss_neg = None
+
             try:
-                # 1) Decode images + prompt
-                src_info = parse_img_field(row["source_img"])
-                tgt_info = parse_img_field(row["target_img"])
-
-                src_img = pil_from_bytes(src_info["bytes"])   # stays as PIL for pipeline
-                tgt_img = pil_from_bytes(tgt_info["bytes"])
-                prompt = str(row["instruction"])
-
+                src_img = pil_from_bytes(parse_img_field(row["source_img"])["bytes"])
+                tgt_img = pil_from_bytes(parse_img_field(row["target_img"])["bytes"])
+                prompt  = str(row["instruction"])
                 print(f"Prompt is: {prompt}")
 
-                # 2) Target latents (no grad)
-                with torch.no_grad():
-                    tgt_lat = image_to_latents(tgt_img).detach()   # (1, C, H', W')
+                tgt_lat = image_to_latents(tgt_img).detach()
 
-                # 3) Optional reject latents (no grad)
                 reject_lat = None
                 if USE_REJECT and "reject_img" in df.columns and not pd.isna(row["reject_img"]):
-                    rej_info = parse_img_field(row["reject_img"])
-                    rej_img = pil_from_bytes(rej_info["bytes"])
-                    with torch.no_grad():
-                        reject_lat = image_to_latents(rej_img).detach()
+                    rej_img = pil_from_bytes(parse_img_field(row["reject_img"])["bytes"])
+                    reject_lat = image_to_latents(rej_img).detach()
 
                 for step in range(steps_per_image):
                     opt.zero_grad(set_to_none=True)
 
-                    # --- Forward with gradients through 'and' embedding ---
-                    torch.cuda.empty_cache()
-
-                    with autocast(dtype=torch.float16):
+                    with torch.autocast("cuda", dtype=DTYPE):
                         out = qwen_edit_forward(
                             pipeline,
                             image=src_img,
                             prompt=prompt,
                             negative_prompt=None,
-                            num_inference_steps=NUM_STEPS_TRAIN,   # small, e.g. 1–4
-                            true_cfg_scale=GUIDANCE,               # 1.0 => no CFG
+                            num_inference_steps=NUM_STEPS_TRAIN,
+                            true_cfg_scale=GUIDANCE,
                             height=HEIGHT,
                             width=WIDTH,
                             output_type="latent",
@@ -270,117 +249,62 @@ def train_on_df(df: pd.DataFrame, epochs: int = EPOCHS, steps_per_image: int = S
                             and_neologism_emb=and_neologism_emb,
                             target_token_ids=target_token_ids,
                         )
-                        gen_lat = out.images  # (1, C, H', W')
-                        del out
-                        torch.cuda.empty_cache()
+                        gen_lat = out.images
 
-                        # Check for NaNs / inf in generated latents
-                        if not torch.isfinite(gen_lat).all():
-                            print(f"[WARN] Row {idx}, step {step}: non-finite gen_lat; skipping update.")
-                            continue
-
-                        # Match dtype & crop
-                        gen_lat = gen_lat.to(dtype=tgt_lat.dtype)
-
-                        min_c = min(gen_lat.shape[1], tgt_lat.shape[1])
-                        min_h = min(gen_lat.shape[-2], tgt_lat.shape[-2])
-                        min_w = min(gen_lat.shape[-1], tgt_lat.shape[-1])
-
-                        gl = gen_lat[:, :min_c, :min_h, :min_w]
-                        tl = tgt_lat[:, :min_c, :min_h, :min_w]
-
-                        # Sanity on targets
-                        if not torch.isfinite(tl).all():
-                            print(f"[WARN] Row {idx}, step {step}: non-finite tgt_lat; skipping.")
-                            continue
-
-                        loss_pos = F.mse_loss(gl, tl)
-                        del tl
-
-                        # Optional reject latent loss
-                        loss_neg = None
-                        if USE_REJECT and (reject_lat is not None):
-                            rl = reject_lat[:, :min_c, :min_h, :min_w]
-                            if torch.isfinite(rl).all():
-                                loss_neg = F.mse_loss(gl, rl)
-                                loss = loss_pos - REJECT_LAMBDA * loss_neg
-                            else:
-                                print(f"[WARN] Row {idx}, step {step}: non-finite reject_lat; ignoring reject term.")
-                                loss = loss_pos
-                            del rl
-                        else:
-                            loss = loss_pos
-                        torch.cuda.empty_cache()
-
-                        # Loss must be finite
-                        if not torch.isfinite(loss):
-                            print(f"[WARN] Row {idx}, step {step}: non-finite loss; skipping.")
-                            continue
-
-                    scaler.scale(loss).backward()
-                    # loss.backward()
-
-                    del loss
-                    torch.cuda.empty_cache()
-
-                    # Guard gradient on the neologism embedding
-                    if and_neologism_emb.grad is None or not torch.isfinite(and_neologism_emb.grad).all():
-                        print(f"[WARN] Row {idx}, step {step}: non-finite grad; zeroing & skipping step.")
-                        if and_neologism_emb.grad is not None:
-                            and_neologism_emb.grad.zero_()
+                    if not torch.isfinite(gen_lat).all():
+                        print(f"[WARN] Row {idx}, step {step}: non-finite gen_lat; skipping.")
                         continue
 
-                    # Gradient clipping for stability
-                    # torch.nn.utils.clip_grad_norm_([and_neologism_emb], max_norm=1.0)
+                    # align shapes
+                    min_c = min(gen_lat.shape[1], tgt_lat.shape[1])
+                    min_h = min(gen_lat.shape[-2], tgt_lat.shape[-2])
+                    min_w = min(gen_lat.shape[-1], tgt_lat.shape[-1])
 
-                    # opt.step()
+                    gl = gen_lat[:, :min_c, :min_h, :min_w]
+                    tl = tgt_lat[:, :min_c, :min_h, :min_w]
 
-                    # Unscale before gradient clipping
-                    scaler.unscale_(opt)
-                    torch.nn.utils.clip_grad_norm_([and_neologism_emb], max_norm=1.0)
-                    
-                    # Scaled optimizer step
-                    scaler.step(opt)
-                    scaler.update()
+                    # fp32 loss
+                    loss_pos = F.mse_loss(gl.float(), tl.float())
 
-                    torch.cuda.empty_cache()
+                    if USE_REJECT and reject_lat is not None:
+                        rl = reject_lat[:, :min_c, :min_h, :min_w]
+                        loss_neg = F.mse_loss(gl.float(), rl.float())
+                        loss = loss_pos - REJECT_LAMBDA * loss_neg
+                    else:
+                        loss = loss_pos
 
-                # 5) Logging
-                if (idx + 1) % 5 == 0:
-                    msg = f"[{idx + 1}/{n_rows}] loss_pos={loss_pos.item():.4f}"
-                    if USE_REJECT and (reject_lat is not None) and (loss_neg is not None):
+                    if not torch.isfinite(loss):
+                        print(f"[WARN] Row {idx}, step {step}: non-finite loss; skipping.")
+                        continue
+
+                    # ✅ bf16 ⇒ normal backward, no scaler
+                    loss.backward()
+                    torch.nn.utils.clip_grad_norm_([and_neologism_emb], 1.0)
+                    opt.step()
+
+                if (idx + 1) % 5 == 0 and loss_pos is not None:
+                    msg = f"[{idx+1}/{n_rows}] loss_pos={loss_pos.item():.4f}"
+                    if USE_REJECT and loss_neg is not None:
                         msg += f" loss_neg={loss_neg.item():.4f}"
                     msg += f" ||and_emb||={and_neologism_emb.norm().item():.3f}"
                     print(msg)
 
-                # 6) Optional preview
-                if (idx + 1) % 50 == 0:
-                    with torch.no_grad():
-                        out_preview = pipeline(
-                            image=src_img,
-                            prompt=prompt,
-                            num_inference_steps=NUM_STEPS_EVAL,
-                            true_cfg_scale=4.0,   # CFG only at eval
-                            height=HEIGHT,
-                            width=WIDTH,
-                            output_type="pil",
-                            return_dict=True,
-                        )
-                        img_preview = out_preview.images[0]
-                        img_preview.save(os.path.join(SAVE_DIR, f"train_preview_{idx:05d}.png"))
-
-                # 7) Cleanup
+                # cleanup
                 del tgt_lat, gen_lat
                 if reject_lat is not None:
                     del reject_lat
                 gc.collect()
-                if torch.cuda.is_available():
-                    torch.cuda.empty_cache()
-                    torch.cuda.synchronize()
+                torch.cuda.empty_cache()
 
             except Exception as e:
                 print(f"Row {idx} failed during training: {e}")
+        if (epoch + 1) % 2 == 0:
+            save_neologism_checkpoint(epoch)
+            l2_dist, cos_sim = neologism_distance_stats()
+            print(f"[CHECKPOINT EPOCH {epoch+1}] L2={l2_dist:.6f} | cosine={cos_sim:.6f}")
 
+            with open(os.path.join(SAVE_DIR, "neologism_drift_log.txt"), "a") as f:
+                f.write(f"epoch={epoch+1:03d}  L2={l2_dist:.6f}  cosine={cos_sim:.6f}\n")
 
 
 # ===========================
@@ -393,28 +317,75 @@ def evaluate_and_save(df: pd.DataFrame, subdir: str = "eval"):
 
     for idx, row in df.iterrows():
         try:
-            src_info = parse_img_field(row["source_img"])
-            src_img = pil_from_bytes(src_info["bytes"])
-            prompt = str(row["instruction"])
+            src_img = pil_from_bytes(parse_img_field(row["source_img"])["bytes"])
+            prompt  = str(row["instruction"])
 
-            out = pipeline(
+            # ---------
+            # (A) BASELINE: no neologism injection
+            # ---------
+            out_base = qwen_edit_forward(
+                pipeline,
                 image=src_img,
                 prompt=prompt,
+                negative_prompt="",
                 num_inference_steps=NUM_STEPS_EVAL,
-                true_cfg_scale=4.0,  # CFG ok here; no grads
+                true_cfg_scale=4.0,     # CFG ok at eval
                 height=HEIGHT,
                 width=WIDTH,
                 output_type="pil",
                 return_dict=True,
+                and_neologism_emb=None,   # <-- baseline
+                target_token_ids=None,
             )
-            img = out.images[0]
-            img.save(os.path.join(out_dir, f"img_{idx:05d}.png"))
+            img_base = out_base.images[0]
 
-            if torch.cuda.is_available():
-                torch.cuda.empty_cache()
+            # ---------
+            # (B) NEOLOGISM: inject trained embedding
+            # ---------
+            out_neo = qwen_edit_forward(
+                pipeline,
+                image=src_img,
+                prompt=prompt,
+                negative_prompt="",
+                num_inference_steps=NUM_STEPS_EVAL,
+                true_cfg_scale=4.0,
+                height=HEIGHT,
+                width=WIDTH,
+                output_type="pil",
+                return_dict=True,
+                and_neologism_emb=and_neologism_emb,  # <-- neo
+                target_token_ids=target_token_ids,
+            )
+            img_neo = out_neo.images[0]
+
+            # ---------
+            # Save images + prompt
+            # ---------
+            base_path = os.path.join(out_dir, f"img_{idx:05d}_base.png")
+            neo_path  = os.path.join(out_dir, f"img_{idx:05d}_neo.png")
+            cmp_path  = os.path.join(out_dir, f"img_{idx:05d}_cmp.png")
+            txt_path  = os.path.join(out_dir, f"img_{idx:05d}.txt")
+
+            img_base.save(base_path)
+            img_neo.save(neo_path)
+
+            # optional side-by-side comparison
+            w, h = img_base.size
+            cmp = Image.new("RGB", (w * 2, h))
+            cmp.paste(img_base, (0, 0))
+            cmp.paste(img_neo,  (w, 0))
+            cmp.save(cmp_path)
+
+            with open(txt_path, "w") as f:
+                f.write(prompt)
+
+            print(f"[EVAL] saved {idx:05d}: base / neo / cmp")
 
         except Exception as e:
-            print(f"Row {idx} failed during eval: {e}")
+            print(f"Eval row {idx} failed: {e}")
+
+
+
 
 # ===========================
 # 6) Main
@@ -429,25 +400,25 @@ if __name__ == "__main__":
     if MAX_TRAIN_IMAGES is not None:
         df = df.head(MAX_TRAIN_IMAGES)
         print(f"Using first {len(df)} rows for training")
-    print("Initial neologism norm:", and_neologism_emb.norm().item())
 
-    print("Starting 'and' neologism training...")
-    train_on_df(df, epochs=EPOCHS, steps_per_image=STEPS_PER_IMAGE)
+    print("Initial neologism norm:", and_neologism_emb.norm().item())
+    print("Starting training...")
+    train_on_df(df)
     print("Final neologism norm:", and_neologism_emb.norm().item())
 
+  
+    print("Evaluating...")
+    evaluate_and_save(df, subdir="eval")
 
-    # Optionally bake the learned embedding back into the embedding table
+    if torch.cuda.is_available():
+      torch.cuda.empty_cache()
+
+    # Bake learned embedding back into embedding table
     with torch.no_grad():
-        base_ids = list(target_token_ids)
-        base_vecs = emb_layer.weight[base_ids]
-        print("Original average 'and' embedding norm:",
-              base_vecs.mean(dim=0).norm().item())
-        # Replace all those rows with the learned vector
         new_vec = and_neologism_emb.to(emb_layer.weight.dtype).to(emb_layer.weight.device)
-        for tid in base_ids:
+        for tid in target_token_ids:
             emb_layer.weight[tid] = new_vec
 
-    # Save the learned neologism embedding
     projector_path = os.path.join(SAVE_DIR, "and_neologism_embedding.pt")
     torch.save(
         {
@@ -458,8 +429,5 @@ if __name__ == "__main__":
         projector_path,
     )
     print("Saved and_neologism_embedding.pt to", projector_path)
-
-    print("Evaluating with trained 'and' embedding...")
-    evaluate_and_save(df, subdir="eval")
 
     print("Done. Outputs in:", SAVE_DIR)
