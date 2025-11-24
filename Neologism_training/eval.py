@@ -25,7 +25,7 @@ from train import pil_from_bytes, parse_img_field  # noqa: F401
 # ---------------------------
 # Defaults (match train.py)
 # ---------------------------
-MODEL_PATH_DEFAULT   = "ovedrive/qwen-image-edit-4bit"
+MODEL_PATH_DEFAULT   = "Qwen/Qwen-Image-Edit"
 DATASET_PATH_DEFAULT = "/content/sample_data/filtered_dataset.csv"
 SAVE_DIR_DEFAULT     = "./Neologism_training/outputs_neologism_and"
 
