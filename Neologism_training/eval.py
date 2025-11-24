@@ -46,9 +46,16 @@ def load_frozen_pipeline(model_path: str, dtype: torch.dtype, device: str):
         model_path,
         torch_dtype=dtype,
         device_map=None,
-    ).to(device)
+    )
 
-    # Memory helpers
+    # Offload weights to CPU between calls
+    if hasattr(pipe, "enable_sequential_cpu_offload"):
+        pipe.enable_sequential_cpu_offload()
+    else:
+        # fallback: move only transformer to GPU later
+        pass
+
+    # Memory helpers (still useful for runtime)
     if hasattr(pipe, "enable_attention_slicing"):
         pipe.enable_attention_slicing("max")
     if hasattr(pipe, "vae") and hasattr(pipe.vae, "enable_slicing"):
@@ -56,26 +63,24 @@ def load_frozen_pipeline(model_path: str, dtype: torch.dtype, device: str):
     if hasattr(pipe, "vae") and hasattr(pipe.vae, "enable_tiling"):
         pipe.vae.enable_tiling()
 
-    # Efficient attention (SDPA)
     try:
         if hasattr(pipe.transformer, "set_attn_processor"):
             pipe.transformer.set_attn_processor("sdpa")
     except Exception:
         pass
 
-    # xFormers if installed
     try:
         if hasattr(pipe.transformer, "enable_xformers_memory_efficient_attention"):
             pipe.transformer.enable_xformers_memory_efficient_attention()
     except Exception:
         pass
 
-    # Freeze everything (eval only)
     for module_name in ["text_encoder", "transformer", "vae", "image_encoder"]:
         if hasattr(pipe, module_name):
             for p in getattr(pipe, module_name).parameters():
                 p.requires_grad_(False)
 
+    pipe.to(device)  # <-- optional; with offload it won't pin everything anyway
     return pipe
 
 
