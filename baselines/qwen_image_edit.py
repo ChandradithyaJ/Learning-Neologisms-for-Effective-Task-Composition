@@ -13,22 +13,14 @@ pipeline = QwenImageEditPipeline.from_pretrained(
 pipeline.set_progress_bar_config(disable=None)
 pipeline.enable_model_cpu_offload()
 pipeline.enable_attention_slicing(1)
-
-try:
-    pipeline.enable_vae_tiling()
-except:
-    pass
-
-try:
-    pipeline.enable_vae_slicing()
-except:
-    pass
+pipeline.vae.enable_tiling()
+pipeline.vae.enable_slicing()
 
 if __name__ == "__main__":
     generator = torch.Generator(device="cpu").manual_seed(42)
 
     # use test folder
-    use_test = True
+    use_test = False
     if use_test:
         file_name = "test_image_input"
 
