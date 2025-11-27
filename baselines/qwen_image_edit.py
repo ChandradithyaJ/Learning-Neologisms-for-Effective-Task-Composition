@@ -2,6 +2,7 @@ import torch
 from diffusers import QwenImageEditPipeline
 from PIL import Image
 import os
+import time
 
 model_path = "ovedrive/qwen-image-edit-4bit"
 pipeline = QwenImageEditPipeline.from_pretrained(
@@ -11,6 +12,17 @@ pipeline = QwenImageEditPipeline.from_pretrained(
 )
 pipeline.set_progress_bar_config(disable=None)
 pipeline.enable_model_cpu_offload()
+pipeline.enable_attention_slicing(1)
+
+try:
+    pipeline.enable_vae_tiling()
+except:
+    pass
+
+try:
+    pipeline.enable_vae_slicing()
+except:
+    pass
 
 if __name__ == "__main__":
     generator = torch.Generator(device="cpu").manual_seed(42)
@@ -36,3 +48,41 @@ if __name__ == "__main__":
                 num_inference_steps=20
             ).images[0]
         image.save(f"{output_dir}/{file_name}.jpg")
+
+    else:
+        path_to_images = '../scratch/DL_data/images/'
+        path_to_prompt = '../scratch/DL_data/prompts/composite'
+
+        input_path = f'{path_to_images}/original'
+        output_dir = f'{path_to_images}/qwen_image_edit_output'
+        os.makedirs(output_dir, exist_ok=True)
+
+        for fname in os.listdir(input_path):
+            start_time = time.time()
+
+            file_name = fname[:-4] # removes ".png"
+
+            torch.cuda.empty_cache()
+
+            input_image = Image.open(f"{input_path}/{file_name}.png").convert('RGB')
+            prompt = open(f"{path_to_prompt}/{file_name}.txt", 'r').read()
+
+            print(input_image.size)
+
+            inputs = {
+                "image": input_image,
+                "prompt": prompt,
+                "generator": generator,
+                "true_cfg_scale": 4.0,
+                "negative_prompt":" ",
+                "num_inference_steps": 20, # even 10 steps should be enough in many cases
+            }
+
+            with torch.inference_mode():
+                image = pipeline(**inputs).images[0]
+            image.save(f"{output_dir}/{file_name}.png")
+            torch.cuda.empty_cache()
+
+            print(f"Edited image saved to {output_dir}/{file_name}.png | Time: {time.time()-start_time}s")
+
+            break
