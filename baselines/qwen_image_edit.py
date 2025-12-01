@@ -4,6 +4,7 @@ from diffusers import QwenImageEditPipeline
 from PIL import Image
 import os
 import time
+from utils.logging import update_csv
 
 model_path = "ovedrive/qwen-image-edit-4bit"
 
@@ -48,6 +49,8 @@ if __name__ == "__main__":
         output_dir = f'{path_to_images}/qwen_image_edit_output'
         os.makedirs(output_dir, exist_ok=True)
 
+        csv_path = f'{output_dir}/times.csv'
+
         for fname in os.listdir(input_path):
             start_time = time.time()
 
@@ -71,6 +74,8 @@ if __name__ == "__main__":
 
             torch.cuda.empty_cache()
 
-            print(f"Edited image saved to {output_dir}/{file_name}.png | Time: {time.time()-start_time}s")
+            time_taken = time.time() - start_time
+            update_csv(csv_path, file_name, time_taken)
+            print(f"Edited image saved to {output_dir}/{file_name}.png | Time: {time_taken}s")
 
             break
