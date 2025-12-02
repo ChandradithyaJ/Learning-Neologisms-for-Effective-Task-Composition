@@ -1,0 +1,30 @@
+Lmod has detected the following error: The following module(s) are unknown:
+"miniconda3/23.11.0"
+
+Please check the spelling or version number. Also try "module spider ..."
+It is also possible your cache file is out-of-date; it may help to try:
+  $ module --ignore_cache load "miniconda3/23.11.0"
+
+Also make sure that all modulefiles written in TCL start with the string
+#%Module
+
+
+
+`torch_dtype` is deprecated! Use `dtype` instead!
+Fetching 5 files:   0%|          | 0/5 [00:00<?, ?it/s]Fetching 5 files:  20%|██        | 1/5 [02:02<08:11, 122.95s/it]Fetching 5 files:  40%|████      | 2/5 [02:04<02:33, 51.28s/it] Fetching 5 files: 100%|██████████| 5/5 [02:04<00:00, 24.81s/it]
+Loading checkpoint shards:   0%|          | 0/5 [00:00<?, ?it/s]Loading checkpoint shards:  20%|██        | 1/5 [00:11<00:44, 11.03s/it]Loading checkpoint shards:  40%|████      | 2/5 [00:21<00:32, 10.93s/it]Loading checkpoint shards:  60%|██████    | 3/5 [00:32<00:21, 10.92s/it]Loading checkpoint shards:  80%|████████  | 4/5 [00:43<00:10, 10.97s/it]Loading checkpoint shards: 100%|██████████| 5/5 [00:47<00:00,  8.16s/it]Loading checkpoint shards: 100%|██████████| 5/5 [00:47<00:00,  9.40s/it]
+The image processor of type `Qwen2VLImageProcessor` is now loaded as a fast processor by default, even if the model checkpoint was saved with a slow processor. This is a breaking change and may produce slightly different outputs. To continue using the slow processor, instantiate this class with `use_fast=False`. Note that this behavior will be extended to all models in a future release.
+Traceback (most recent call last):
+  File "/oscar/home/akondap1/Multitask-Image-Editing-via-Neologisms-and-Textual-Inversion/baselines/qwen2_5vl_CoT.py", line 399, in <module>
+    df = pd.read_csv(CSV_INPUT)
+  File "/users/akondap1/.local/lib/python3.10/site-packages/pandas/io/parsers/readers.py", line 1026, in read_csv
+    return _read(filepath_or_buffer, kwds)
+  File "/users/akondap1/.local/lib/python3.10/site-packages/pandas/io/parsers/readers.py", line 620, in _read
+    parser = TextFileReader(filepath_or_buffer, **kwds)
+  File "/users/akondap1/.local/lib/python3.10/site-packages/pandas/io/parsers/readers.py", line 1620, in __init__
+    self._engine = self._make_engine(f, self.engine)
+  File "/users/akondap1/.local/lib/python3.10/site-packages/pandas/io/parsers/readers.py", line 1880, in _make_engine
+    self.handles = get_handle(
+  File "/users/akondap1/.local/lib/python3.10/site-packages/pandas/io/common.py", line 873, in get_handle
+    handle = open(
+FileNotFoundError: [Errno 2] No such file or directory: 'data/filtered_dataset.csv'

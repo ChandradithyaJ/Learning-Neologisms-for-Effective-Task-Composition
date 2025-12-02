@@ -1,0 +1,25 @@
+#!/bin/bash
+#SBATCH -J qwen_cot
+#SBATCH -p gpu
+#SBATCH -N 1
+#SBATCH -n 1
+#SBATCH --gres=gpu:1
+#SBATCH --mem=32G
+#SBATCH -t 02:00:00
+#SBATCH -o logs/qwen_cot_%j.out
+#SBATCH -e logs/qwen_cot_%j.err
+
+
+module load miniconda3/23.11.0
+
+
+source /oscar/runtime/software/external/miniconda3/23.11.0/etc/profile.d/conda.sh
+
+
+conda activate csci2470_final
+
+
+cd /oscar/home/akondap1/Multitask-Image-Editing-via-Neologisms-and-Textual-Inversion/baselines
+
+
+python qwen2_5vl_CoT.py

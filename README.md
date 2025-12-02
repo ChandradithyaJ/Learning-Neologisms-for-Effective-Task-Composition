@@ -8,7 +8,7 @@ conda create -n mtask python==3.11
 conda activate mtask
 ```
 
-### Djrango/Qwen2vl-Flux
+<!-- ### Djrango/Qwen2vl-Flux
 Skip this code block if the `qwen2vl_flux/` folder is already present.
 ```
 git clone https://github.com/erwold/qwen2vl-flux
@@ -29,7 +29,7 @@ Add an `__init__.py` to allow imports from this folder and change the folder nam
 touch __init__.py
 cd ..
 mv qwen2vl-flux/ qwen2vl_flux/
-```
+``` -->
 
 ### Install the packages in editable model from the root
 ```

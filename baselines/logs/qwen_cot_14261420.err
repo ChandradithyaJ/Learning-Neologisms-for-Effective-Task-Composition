@@ -1,0 +1,20 @@
+Lmod has detected the following error: The following module(s) are unknown:
+"miniconda3/23.11.0"
+
+Please check the spelling or version number. Also try "module spider ..."
+It is also possible your cache file is out-of-date; it may help to try:
+  $ module --ignore_cache load "miniconda3/23.11.0"
+
+Also make sure that all modulefiles written in TCL start with the string
+#%Module
+
+
+
+Traceback (most recent call last):
+  File "/oscar/home/akondap1/Multitask-Image-Editing-via-Neologisms-and-Textual-Inversion/baselines/qwen2_5vl_CoT.py", line 186, in <module>
+    from qwen2vl_flux_query import generate_image, save_images
+  File "/oscar/home/akondap1/Multitask-Image-Editing-via-Neologisms-and-Textual-Inversion/baselines/qwen2vl_flux_query.py", line 2, in <module>
+    from qwen2vl_flux.model import FluxModel
+  File "/oscar/home/akondap1/Multitask-Image-Editing-via-Neologisms-and-Textual-Inversion/qwen2vl_flux/model.py", line 18, in <module>
+    import cv2
+ModuleNotFoundError: No module named 'cv2'

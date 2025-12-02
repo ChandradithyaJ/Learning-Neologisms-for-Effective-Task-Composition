@@ -1,0 +1,19 @@
+#!/bin/bash
+#SBATCH -J extract_images_job
+#SBATCH -p gpu
+#SBATCH -N 1
+#SBATCH -n 1
+#SBATCH --gres=gpu:0
+#SBATCH --mem=16G
+#SBATCH -t 00:30:00
+#SBATCH -o logs/extract_images_%j.out
+#SBATCH -e logs/extract_images_%j.err
+
+module load miniconda3/23.11.0s-odstpk5
+source /oscar/runtime/software/external/miniconda3/23.11.0/etc/profile.d/conda.sh
+conda activate csci2470_final
+
+
+cd /oscar/home/akondap1/Multitask-Image-Editing-via-Neologisms-and-Textual-Inversion/data
+
+python extract.py

@@ -1,0 +1,10 @@
+## SLURM PROLOG ###############################################################
+##    Job ID : 14261701
+##  Job Name : qwen_cot
+##  Nodelist : gpu2006
+##      CPUs : 1
+##  Mem/Node : 32768 MB
+## Directory : /oscar/home/akondap1/Multitask-Image-Editing-via-Neologisms-and-Textual-Inversion/baselines
+##   Job Started : Mon Nov 17 05:33:42 PM EST 2025
+###############################################################################
+Loading Qwen2.5-VL model and processor...

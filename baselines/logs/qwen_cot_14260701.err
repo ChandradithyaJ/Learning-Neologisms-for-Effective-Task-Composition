@@ -1,0 +1,20 @@
+Lmod has detected the following error: The following module(s) are unknown:
+"miniconda3/23.11.0"
+
+Please check the spelling or version number. Also try "module spider ..."
+It is also possible your cache file is out-of-date; it may help to try:
+  $ module --ignore_cache load "miniconda3/23.11.0"
+
+Also make sure that all modulefiles written in TCL start with the string
+#%Module
+
+
+
+Traceback (most recent call last):
+  File "/oscar/home/akondap1/Multitask-Image-Editing-via-Neologisms-and-Textual-Inversion/baselines/qwen2_5vl_CoT.py", line 185, in <module>
+    from qwen_vl_utils import process_vision_info
+  File "/users/akondap1/.local/lib/python3.10/site-packages/qwen_vl_utils/__init__.py", line 1, in <module>
+    from .vision_process import (
+  File "/users/akondap1/.local/lib/python3.10/site-packages/qwen_vl_utils/vision_process.py", line 16, in <module>
+    import torchvision
+ModuleNotFoundError: No module named 'torchvision'

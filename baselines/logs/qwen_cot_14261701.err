@@ -1,0 +1,21 @@
+Lmod has detected the following error: The following module(s) are unknown:
+"miniconda3/23.11.0"
+
+Please check the spelling or version number. Also try "module spider ..."
+It is also possible your cache file is out-of-date; it may help to try:
+  $ module --ignore_cache load "miniconda3/23.11.0"
+
+Also make sure that all modulefiles written in TCL start with the string
+#%Module
+
+
+
+`torch_dtype` is deprecated! Use `dtype` instead!
+Traceback (most recent call last):
+  File "/oscar/home/akondap1/Multitask-Image-Editing-via-Neologisms-and-Textual-Inversion/baselines/qwen2_5vl_CoT.py", line 231, in <module>
+    model = Qwen2_5_VLForConditionalGeneration.from_pretrained(
+  File "/users/akondap1/.local/lib/python3.10/site-packages/transformers/modeling_utils.py", line 277, in _wrapper
+    return func(*args, **kwargs)
+  File "/users/akondap1/.local/lib/python3.10/site-packages/transformers/modeling_utils.py", line 4806, in from_pretrained
+    raise ValueError(
+ValueError: Using a `device_map`, `tp_plan`, `torch.device` context manager or setting `torch.set_default_device(device)` requires `accelerate`. You can install it with `pip install accelerate`

@@ -1,0 +1,18 @@
+Lmod has detected the following error: The following module(s) are unknown:
+"miniconda3/23.11.0"
+
+Please check the spelling or version number. Also try "module spider ..."
+It is also possible your cache file is out-of-date; it may help to try:
+  $ module --ignore_cache load "miniconda3/23.11.0"
+
+Also make sure that all modulefiles written in TCL start with the string
+#%Module
+
+
+
+None of PyTorch, TensorFlow >= 2.0, or Flax have been found. Models won't be available and only tokenizers, configuration and file/data utilities can be used.
+None of PyTorch, TensorFlow >= 2.0, or Flax have been found. Models won't be available and only tokenizers, configuration and file/data utilities can be used.
+Traceback (most recent call last):
+  File "/oscar/home/akondap1/Multitask-Image-Editing-via-Neologisms-and-Textual-Inversion/baselines/qwen2_5vl_CoT.py", line 185, in <module>
+    from qwen_vl_utils import process_vision_info
+ModuleNotFoundError: No module named 'qwen_vl_utils'
