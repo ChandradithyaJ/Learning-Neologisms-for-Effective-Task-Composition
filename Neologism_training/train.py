@@ -29,15 +29,16 @@ TARGET_WORDS = [" and"]
 
 # Learning / schedule
 LR = 3e-4
-EPOCHS = 10
+EPOCHS = 3
 STEPS_PER_IMAGE = 2   # safe on A100; bump to 3 if you want
 
+SAVE_EVERY_N = 1
 # Resolution
 HEIGHT = 512
 WIDTH  = 512
 
 # Denoising
-NUM_STEPS_TRAIN = 6   # 4–8 works well on A100
+NUM_STEPS_TRAIN = 10   # 4–8 works well on A100
 NUM_STEPS_EVAL  = 15  # nicer previews (no grads)
 GUIDANCE = 1.0        # no CFG during training
 
@@ -298,7 +299,7 @@ def train_on_df(df: pd.DataFrame, epochs: int = EPOCHS, steps_per_image: int = S
 
             except Exception as e:
                 print(f"Row {idx} failed during training: {e}")
-        if (epoch + 1) % 2 == 0:
+        if (epoch + 1) % SAVE_EVERY_N == 0:
             save_neologism_checkpoint(epoch)
             l2_dist, cos_sim = neologism_distance_stats()
             print(f"[CHECKPOINT EPOCH {epoch+1}] L2={l2_dist:.6f} | cosine={cos_sim:.6f}")
