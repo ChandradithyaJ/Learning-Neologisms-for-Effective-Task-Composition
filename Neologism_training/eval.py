@@ -15,15 +15,11 @@ import torch.nn as nn
 from PIL import Image
 from diffusers import QwenImageEditPipeline
 
-from qwen_diff_train_forward import qwen_edit_forward
-
-# Import shared utilities from train.py
-# (train.py must guard training with if __name__ == "__main__": )
-from train import pil_from_bytes, parse_img_field  # noqa: F401
+from qwen_diff_train_forward import qwen_edit_forward  # your custom forward
 
 
 # ---------------------------
-# Defaults (match train.py)
+# Defaults (match train.py where relevant)
 # ---------------------------
 MODEL_PATH_DEFAULT   = "Qwen/Qwen-Image-Edit"
 DATASET_PATH_DEFAULT = "/content/sample_data/filtered_dataset.csv"
@@ -32,62 +28,34 @@ SAVE_DIR_DEFAULT     = "./Neologism_training/outputs_neologism_and"
 HEIGHT_DEFAULT = 512
 WIDTH_DEFAULT  = 512
 
-NUM_STEPS_EVAL_DEFAULT = 15
+NUM_STEPS_EVAL_DEFAULT = 20
 CFG_EVAL_DEFAULT       = 4.0
 
 DTYPE_DEFAULT = torch.bfloat16  # A100-friendly
 
 
 # ---------------------------
-# Pipeline loader (frozen)
+# Simple shared utilities
+# (avoid importing train.py to prevent double-loading the pipeline)
 # ---------------------------
-def load_frozen_pipeline(model_path: str, dtype: torch.dtype, device: str):
-    pipe = QwenImageEditPipeline.from_pretrained(
-        model_path,
-        torch_dtype=dtype,
-        device_map=None,
-    )
+def pil_from_bytes(b: bytes) -> Image.Image:
+    return Image.open(io.BytesIO(b)).convert("RGB")
 
-    # Offload weights to CPU between calls
-    if hasattr(pipe, "enable_sequential_cpu_offload"):
-        pipe.enable_sequential_cpu_offload()
-    else:
-        # fallback: move only transformer to GPU later
-        pass
-
-    # Memory helpers (still useful for runtime)
-    if hasattr(pipe, "enable_attention_slicing"):
-        pipe.enable_attention_slicing("max")
-    if hasattr(pipe, "vae") and hasattr(pipe.vae, "enable_slicing"):
-        pipe.vae.enable_slicing()
-    if hasattr(pipe, "vae") and hasattr(pipe.vae, "enable_tiling"):
-        pipe.vae.enable_tiling()
-
-    try:
-        if hasattr(pipe.transformer, "set_attn_processor"):
-            pipe.transformer.set_attn_processor("sdpa")
-    except Exception:
-        pass
-
-    try:
-        if hasattr(pipe.transformer, "enable_xformers_memory_efficient_attention"):
-            pipe.transformer.enable_xformers_memory_efficient_attention()
-    except Exception:
-        pass
-
-    for module_name in ["text_encoder", "transformer", "vae", "image_encoder"]:
-        if hasattr(pipe, module_name):
-            for p in getattr(pipe, module_name).parameters():
-                p.requires_grad_(False)
-
-    pipe.to(device)  # <-- optional; with offload it won't pin everything anyway
-    return pipe
+def parse_img_field(value):
+    if isinstance(value, dict):
+        return value
+    if isinstance(value, str):
+        return ast.literal_eval(value)
+    raise TypeError(f"Unexpected type for image field: {type(value)}")
 
 
 # ---------------------------
 # Load neologism ckpt
 # ---------------------------
 def load_neologism_ckpt(ckpt_path: str, device: str):
+    """
+    Load the trained neologism embedding and associated metadata.
+    """
     ckpt = torch.load(ckpt_path, map_location="cpu")
     token_ids: List[int] = ckpt.get("token_ids", [])
     target_words = ckpt.get("target_words", None)
@@ -130,7 +98,9 @@ def evaluate_and_save(
             src_img = pil_from_bytes(parse_img_field(row["source_img"])["bytes"])
             prompt  = str(row["instruction"])
 
-            # (A) BASELINE
+            # ---------
+            # (A) BASELINE: no neologism injection
+            # ---------
             out_base = qwen_edit_forward(
                 pipeline,
                 image=src_img,
@@ -147,7 +117,9 @@ def evaluate_and_save(
             )
             img_base = out_base.images[0]
 
-            # (B) NEOLOGISM
+            # ---------
+            # (B) NEOLOGISM: inject trained embedding
+            # ---------
             out_neo = qwen_edit_forward(
                 pipeline,
                 image=src_img,
@@ -164,7 +136,9 @@ def evaluate_and_save(
             )
             img_neo = out_neo.images[0]
 
+            # ---------
             # Save images + prompt
+            # ---------
             base_path = os.path.join(out_dir, f"img_{idx:05d}_base.png")
             neo_path  = os.path.join(out_dir, f"img_{idx:05d}_neo.png")
             cmp_path  = os.path.join(out_dir, f"img_{idx:05d}_cmp.png")
@@ -173,7 +147,7 @@ def evaluate_and_save(
             img_base.save(base_path)
             img_neo.save(neo_path)
 
-            # side-by-side
+            # side-by-side comparison
             w, h = img_base.size
             cmp = Image.new("RGB", (w * 2, h))
             cmp.paste(img_base, (0, 0))
@@ -188,6 +162,7 @@ def evaluate_and_save(
         except Exception as e:
             print(f"Eval row {idx} failed: {e}")
 
+        # light cleanup; remove if you want max speed
         gc.collect()
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
@@ -220,15 +195,46 @@ def main():
     device = "cuda" if torch.cuda.is_available() else "cpu"
     dtype = DTYPE_DEFAULT
     print("device:", device)
-    print("dtype:", dtype)
+    print("Using dtype:", dtype)
 
-    # Load pipeline
-    pipeline = load_frozen_pipeline(args.model, dtype, device)
+    # 1) Load pipeline — like training, but only once
+    pipeline = QwenImageEditPipeline.from_pretrained(
+        args.model,
+        torch_dtype=dtype,
+        device_map=None,
+    ).to(device)
 
-    # Load neologism
+    # Light memory helpers (same style as training)
+    if hasattr(pipeline, "enable_attention_slicing"):
+        pipeline.enable_attention_slicing("max")
+    if hasattr(pipeline, "vae") and hasattr(pipeline.vae, "enable_slicing"):
+        pipeline.vae.enable_slicing()
+    if hasattr(pipeline.vae, "enable_tiling"):
+        pipeline.vae.enable_tiling()
+
+    # Efficient attention / xFormers
+    try:
+        if hasattr(pipeline.transformer, "set_attn_processor"):
+            pipeline.transformer.set_attn_processor("sdpa")
+    except Exception:
+        pass
+
+    try:
+        if hasattr(pipeline.transformer, "enable_xformers_memory_efficient_attention"):
+            pipeline.transformer.enable_xformers_memory_efficient_attention()
+    except Exception:
+        pass
+
+    # Freeze everything (no grads in eval)
+    for module_name in ["text_encoder", "transformer", "vae", "image_encoder"]:
+        if hasattr(pipeline, module_name):
+            for p in getattr(pipeline, module_name).parameters():
+                p.requires_grad_(False)
+
+    # 2) Load neologism emb
     and_neologism_emb, target_token_ids = load_neologism_ckpt(args.neologism_ckpt, device)
 
-    # Load dataset
+    # 3) Load dataset
     df = pd.read_csv(args.dataset)
     required_cols = {"source_img", "instruction"}
     missing = required_cols - set(df.columns)
