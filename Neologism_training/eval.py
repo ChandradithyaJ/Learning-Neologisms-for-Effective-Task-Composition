@@ -28,7 +28,7 @@ SAVE_DIR_DEFAULT     = "./Neologism_training/outputs_neologism_and"
 HEIGHT_DEFAULT = 512
 WIDTH_DEFAULT  = 512
 
-NUM_STEPS_EVAL_DEFAULT = 10
+NUM_STEPS_EVAL_DEFAULT = 20
 CFG_EVAL_DEFAULT       = 4.0
 
 DTYPE_DEFAULT = torch.bfloat16  # A100-friendly
