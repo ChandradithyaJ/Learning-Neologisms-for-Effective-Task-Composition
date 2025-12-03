@@ -4,7 +4,7 @@ from diffusers import QwenImageEditPipeline
 from PIL import Image
 import os
 import time
-from utils.logging import update_csv
+from utils.logging_utils import update_csv
 
 model_path = "ovedrive/qwen-image-edit-4bit"
 

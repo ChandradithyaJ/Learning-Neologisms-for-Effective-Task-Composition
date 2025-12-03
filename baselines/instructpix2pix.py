@@ -9,7 +9,7 @@ import torch
 from diffusers import StableDiffusionInstructPix2PixPipeline, EulerAncestralDiscreteScheduler
 from PIL import Image
 import time
-from utils.logging import update_csv
+from utils.logging_utils import update_csv
 
 model_id = "timbrooks/instruct-pix2pix"
 pipe = StableDiffusionInstructPix2PixPipeline.from_pretrained(model_id, 
