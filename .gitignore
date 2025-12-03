@@ -216,3 +216,4 @@ __marimo__/
 *.csv
 data/images/
 data/logs/
+DL_data/
