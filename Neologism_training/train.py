@@ -29,8 +29,8 @@ TARGET_WORDS = [" and"]
 
 # Learning / schedule
 LR = 3e-4
-EPOCHS = 3
-STEPS_PER_IMAGE = 2   # safe on A100; bump to 3 if you want
+EPOCHS = 20
+STEPS_PER_IMAGE = 1   # safe on A100; bump to 3 if you want
 
 SAVE_EVERY_N = 1
 # Resolution
@@ -38,11 +38,11 @@ HEIGHT = 512
 WIDTH  = 512
 
 # Denoising
-NUM_STEPS_TRAIN = 10   # 4–8 works well on A100
+NUM_STEPS_TRAIN = 8   # 4–8 works well on A100
 NUM_STEPS_EVAL  = 15  # nicer previews (no grads)
 GUIDANCE = 1.0        # no CFG during training
 
-MAX_TRAIN_IMAGES = 50  # set int for debug
+MAX_TRAIN_IMAGES = 100  # set int for debug
 
 # Reject loss
 USE_REJECT = True
@@ -214,6 +214,10 @@ def train_on_df(df: pd.DataFrame, epochs: int = EPOCHS, steps_per_image: int = S
 
     for epoch in range(epochs):
         print(f"\n===== EPOCH {epoch + 1}/{epochs} =====")
+        epoch_loss_pos_sum = 0.0
+        epoch_loss_neg_sum = 0.0
+        epoch_num_pos = 0
+        epoch_num_neg = 0
 
         for idx, row in df.iterrows():
             loss_pos = None
@@ -278,6 +282,13 @@ def train_on_df(df: pd.DataFrame, epochs: int = EPOCHS, steps_per_image: int = S
                         print(f"[WARN] Row {idx}, step {step}: non-finite loss; skipping.")
                         continue
 
+                    #LOGGING    
+                    epoch_loss_pos_sum += loss_pos.item()
+                    epoch_num_pos += 1
+                    if USE_REJECT and reject_lat is not None and loss_neg is not None:
+                        epoch_loss_neg_sum += loss_neg.item()
+                        epoch_num_neg += 1
+
                     # ✅ bf16 ⇒ normal backward, no scaler
                     loss.backward()
                     torch.nn.utils.clip_grad_norm_([and_neologism_emb], 1.0)
@@ -299,6 +310,18 @@ def train_on_df(df: pd.DataFrame, epochs: int = EPOCHS, steps_per_image: int = S
 
             except Exception as e:
                 print(f"Row {idx} failed during training: {e}")
+        if epoch_num_pos > 0:
+            avg_pos = epoch_loss_pos_sum / epoch_num_pos
+        else:
+            avg_pos = float("nan")
+
+        if epoch_num_neg > 0:
+            avg_neg = epoch_loss_neg_sum / epoch_num_neg
+        else:
+            avg_neg = float("nan")
+
+        print(f"[EPOCH {epoch+1}] avg_pos_loss={avg_pos:.6f}, avg_neg_loss={avg_neg:.6f} "
+              f"(pos_steps={epoch_num_pos}, neg_steps={epoch_num_neg})")
         if (epoch + 1) % SAVE_EVERY_N == 0:
             save_neologism_checkpoint(epoch)
             l2_dist, cos_sim = neologism_distance_stats()
@@ -306,6 +329,14 @@ def train_on_df(df: pd.DataFrame, epochs: int = EPOCHS, steps_per_image: int = S
 
             with open(os.path.join(SAVE_DIR, "neologism_drift_log.txt"), "a") as f:
                 f.write(f"epoch={epoch+1:03d}  L2={l2_dist:.6f}  cosine={cos_sim:.6f}\n")
+
+            with open(os.path.join(SAVE_DIR, "epoch_loss_log.txt"), "a") as f:
+                f.write(
+                    f"epoch={epoch+1:03d}  avg_pos_loss={avg_pos:.6f}  "
+                    f"avg_neg_loss={avg_neg:.6f}  pos_steps={epoch_num_pos}  "
+                    f"neg_steps={epoch_num_neg}\n"
+                )
+
 
 
 # ===========================
@@ -386,6 +417,72 @@ def evaluate_and_save(df: pd.DataFrame, subdir: str = "eval"):
             print(f"Eval row {idx} failed: {e}")
 
 
+def compute_initial_epoch_loss(df):
+    pos_sum = 0.0
+    neg_sum = 0.0
+    n_pos = 0
+    n_neg = 0
+
+    print("\n=== COMPUTING INITIAL BASELINE LOSS (lightweight) ===")
+
+    for idx, row in df.iterrows():
+        try:
+            src_img = pil_from_bytes(parse_img_field(row["source_img"])["bytes"])
+            tgt_img = pil_from_bytes(parse_img_field(row["target_img"])["bytes"])
+            tgt_lat = image_to_latents(tgt_img).detach()
+
+            # use fewer steps for quick baseline
+            with torch.autocast("cuda", dtype=DTYPE):
+                out = qwen_edit_forward(
+                    pipeline,
+                    image=src_img,
+                    prompt=str(row["instruction"]),
+                    negative_prompt=None,
+                    num_inference_steps=NUM_STEPS_TRAIN,      # <--- very low steps
+                    true_cfg_scale=GUIDANCE,
+                    height=HEIGHT,
+                    width=WIDTH,
+                    output_type="latent",
+                    return_dict=True,
+                    and_neologism_emb=and_neologism_emb,
+                    target_token_ids=target_token_ids,
+                )
+            gen_lat = out.images
+
+            # match shapes
+            min_c = min(gen_lat.shape[1], tgt_lat.shape[1])
+            min_h = min(gen_lat.shape[-2], tgt_lat.shape[-2])
+            min_w = min(gen_lat.shape[-1], tgt_lat.shape[-1])
+
+            gl = gen_lat[:, :min_c, :min_h, :min_w]
+            tl = tgt_lat[:, :min_c, :min_h, :min_w]
+
+            loss_pos = F.mse_loss(gl.float(), tl.float())
+            pos_sum += loss_pos.item()
+            n_pos += 1
+
+            if USE_REJECT and "reject_img" in df.columns and not pd.isna(row["reject_img"]):
+                rej_img = pil_from_bytes(parse_img_field(row["reject_img"])["bytes"])
+                rlat = image_to_latents(rej_img).detach()
+                rl = rlat[:, :min_c, :min_h, :min_w]
+                loss_neg = F.mse_loss(gl.float(), rl.float())
+                neg_sum += loss_neg.item()
+                n_neg += 1
+
+        except Exception as e:
+            print(f"[WARN] initial loss failed on row {idx}: {e}")
+
+    avg_pos = pos_sum / max(n_pos, 1)
+    avg_neg = neg_sum / max(n_neg, 1)
+
+    print(f"Initial avg_pos_loss={avg_pos:.6f} over {n_pos} samples")
+    if USE_REJECT:
+        print(f"Initial avg_neg_loss={avg_neg:.6f} over {n_neg} samples")
+    print("=====================================\n")
+
+    return avg_pos, avg_neg
+
+
 
 
 # ===========================
@@ -402,6 +499,13 @@ if __name__ == "__main__":
         df = df.head(MAX_TRAIN_IMAGES)
         print(f"Using first {len(df)} rows for training")
 
+    print("Starting pre train eval")
+    initial_pos, initial_neg = compute_initial_epoch_loss(df)
+    with open(os.path.join(SAVE_DIR, "epoch_loss_log.txt"), "a") as f:
+      f.write(
+          f"epoch=000  avg_pos_loss={initial_pos:.6f}  "
+          f"avg_neg_loss={initial_neg:.6f}\n"
+      )
     print("Initial neologism norm:", and_neologism_emb.norm().item())
     print("Starting training...")
     train_on_df(df)
