@@ -12,7 +12,10 @@ import time
 from utils.logging_utils import update_csv
 
 model_id = "timbrooks/instruct-pix2pix"
-pipe = StableDiffusionInstructPix2PixPipeline.from_pretrained(model_id, 
+finetuned_model_id = "vinesmsuic/magicbrush-jul7"
+
+pipe = StableDiffusionInstructPix2PixPipeline.from_pretrained(
+    finetuned_model_id, 
     torch_dtype=torch.float16,
     safety_checker=None
 )

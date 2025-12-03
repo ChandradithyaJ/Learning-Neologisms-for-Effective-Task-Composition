@@ -12,7 +12,10 @@ import time
 from utils.logging_utils import update_csv
 
 model_id = "timbrooks/instruct-pix2pix"
-pipe = StableDiffusionInstructPix2PixPipeline.from_pretrained(model_id, 
+finetuned_model_id = "vinesmsuic/magicbrush-jul7"
+
+pipe = StableDiffusionInstructPix2PixPipeline.from_pretrained(
+    finetuned_model_id, 
     torch_dtype=torch.float16,
     safety_checker=None
 )
@@ -35,9 +38,6 @@ if __name__ == "__main__":
 
         file_name = fname[:-4] # removes ".png"
 
-        if file_name != "271":
-            continue
-
         input_image = Image.open(f"{input_path}/{file_name}.png").convert('RGB')
         prompt = open(f"{path_to_prompt}/{file_name}.txt", 'r').read()
 
@@ -50,8 +50,8 @@ if __name__ == "__main__":
                 image = pipe(prompt, 
                     image=image, 
                     num_inference_steps=30,
-                    guidance_scale=8,
-                    image_guidance_scale=2 + 0.5 * idx,
+                    guidance_scale=7.5,
+                    image_guidance_scale=1.5, # 2 + 0.5 * idx
                     negative_prompt="blurry, distorted, deformed, disfigured, low quality"
                 ).images[0]
                 if idx != len(subprompts)-1:
