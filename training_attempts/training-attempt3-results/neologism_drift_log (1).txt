@@ -1,0 +1,17 @@
+epoch=001  L2=0.155229  cosine=0.987924
+epoch=002  L2=0.283959  cosine=0.960443
+epoch=003  L2=0.332533  cosine=0.947169
+epoch=004  L2=0.409842  cosine=0.922001
+epoch=005  L2=0.480456  cosine=0.896313
+epoch=006  L2=0.513517  cosine=0.884023
+epoch=007  L2=0.537981  cosine=0.875614
+epoch=008  L2=0.547363  cosine=0.872575
+epoch=009  L2=0.554665  cosine=0.869748
+epoch=010  L2=0.549829  cosine=0.871817
+epoch=011  L2=0.549744  cosine=0.872624
+epoch=012  L2=0.602056  cosine=0.852583
+epoch=013  L2=0.612064  cosine=0.849890
+epoch=014  L2=0.665192  cosine=0.827021
+epoch=015  L2=0.681349  cosine=0.821208
+epoch=016  L2=0.752909  cosine=0.789948
+epoch=017  L2=0.761087  cosine=0.787184
