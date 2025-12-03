@@ -47,7 +47,7 @@ if __name__ == "__main__":
                 image=input_image, 
                 num_inference_steps=30,
                 guidance_scale=7.5,
-                image_guidance_scale=1
+                image_guidance_scale=1.5
             ).images[0]
             image.save(f"{output_dir}/{file_name}.png")
 

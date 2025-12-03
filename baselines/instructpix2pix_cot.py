@@ -51,7 +51,7 @@ if __name__ == "__main__":
                     image=image, 
                     num_inference_steps=30,
                     guidance_scale=7.5,
-                    image_guidance_scale=1.5, # 2 + 0.5 * idx
+                    image_guidance_scale=1.5,
                     negative_prompt="blurry, distorted, deformed, disfigured, low quality"
                 ).images[0]
                 if idx != len(subprompts)-1:
@@ -63,5 +63,3 @@ if __name__ == "__main__":
         time_taken = time.time() - start_time
         update_csv(csv_path, file_name, time_taken)
         print(f"Edited image saved to {output_dir}/{file_name}.png | Time: {time_taken}s")
-
-        break
