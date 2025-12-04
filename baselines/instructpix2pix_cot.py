@@ -20,7 +20,7 @@ pipe = StableDiffusionInstructPix2PixPipeline.from_pretrained(
     safety_checker=None
 )
 pipe.to("cuda")
-pipe.scheduler = EulerAncestralDiscreteScheduler.from_config(pipe.scheduler.config)
+# pipe.scheduler = EulerAncestralDiscreteScheduler.from_config(pipe.scheduler.config)
 pipe.scheduler = DDIMScheduler.from_config(pipe.scheduler.config)
 
 if __name__ == "__main__":
