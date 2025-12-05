@@ -46,7 +46,8 @@ class ClipModel():
             with torch.no_grad():
                 emb = self.clip_model.get_image_features(pixel_values=img)
         else:
-            emb = self.clip_model.get_image_features(pixel_values=img)
+            with torch.set_grad_enabled(True):
+                emb = self.clip_model.get_image_features(pixel_values=img)
 
         emb = F.normalize(emb, dim=-1)
         return emb

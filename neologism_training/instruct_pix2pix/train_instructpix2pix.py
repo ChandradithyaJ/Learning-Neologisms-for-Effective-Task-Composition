@@ -13,14 +13,17 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from diffusers import StableDiffusionInstructPix2PixPipeline, EulerAncestralDiscreteScheduler, DDIMScheduler
+from instruct_pix2pix_diff_forward import generate_with_gradients, decode_latents_to_image, latents_to_tensor
 from utils.neologism_utils import ClipModel, pil_from_bytes, parse_img_field
 import pandas as pd
+import gc
+import time
 
-DATASET_PATH = "../scratch/DL_data/filtered_dataset.csv"
+DATASET_PATH = "../../scratch/DL_data/filtered_dataset.csv"
 TARGET_WORDS = [" and"]
 
 # Learning / schedule
-LR = 3e-4
+LR = 1e-4
 EPOCHS = 20
 STEPS_PER_IMAGE = 1
 
@@ -33,13 +36,13 @@ NUM_STEPS_TRAIN = 8   # training steps for instruct_pix2pix
 NUM_STEPS_EVAL  = 15  # nicer previews (no grads)
 GUIDANCE = 1.0        # no CFG during training (true_cfg_scale)   
 
-MAX_TRAIN_IMAGES = 100
+MAX_TRAIN_IMAGES = 80
 
 # Reject loss
 USE_REJECT = False
 REJECT_LAMBDA = 0.00
 
-SAVE_DIR = f"./Neologism_training/instruct_pix2pix_outputs_neologism_and_{STEPS_PER_IMAGE}stepsPerImage"
+SAVE_DIR = f"./instruct_pix2pix/results/instruct_pix2pix_outputs_neologism_and_{STEPS_PER_IMAGE}stepsPerImage_{MAX_TRAIN_IMAGES}trainImages"
 SAVE_EVERY_N = 1
 os.makedirs(SAVE_DIR, exist_ok=True)
 
@@ -75,15 +78,6 @@ def neologism_distance_stats(and_neologism_emb, orig_and_emb):
     cosine_sim = F.cosine_similarity(cur.unsqueeze(0), orig.unsqueeze(0)).item()
     return l2_dist, cosine_sim
 
-def inject_neologism_embedding(text_encoder, target_token_ids, neologism_emb):
-    """
-    Replace token embeddings with learned neologism embedding.
-    """
-    emb_layer = text_encoder.get_input_embeddings()
-    with torch.no_grad():
-        for token_id in target_token_ids:
-            emb_layer.weight[token_id] = neologism_emb.to(emb_layer.weight.dtype)
-
 if __name__ == "__main__":
     model_id = "timbrooks/instruct-pix2pix"
     finetuned_model_id = "vinesmsuic/magicbrush-jul7"
@@ -91,10 +85,26 @@ if __name__ == "__main__":
     pipe = StableDiffusionInstructPix2PixPipeline.from_pretrained(
         finetuned_model_id,
         torch_dtype=torch.float16,
-        safety_checker=None
+        safety_checker=None,
     ).to(device)
     # pipe.scheduler = EulerAncestralDiscreteScheduler.from_config(pipe.scheduler.config)
     pipe.scheduler = DDIMScheduler.from_config(pipe.scheduler.config)
+
+    pipe.unet.enable_gradient_checkpointing()
+    pipe.vae.enable_gradient_checkpointing()
+    if hasattr(pipe.text_encoder, 'gradient_checkpointing_enable'):
+        pipe.text_encoder.gradient_checkpointing_enable()
+
+    try:
+        from diffusers.utils import is_xformers_available
+        if is_xformers_available():
+            pipe.enable_xformers_memory_efficient_attention()
+            print("Enabled xformers memory efficient attention")
+    except:
+        print("xformers not available, using default attention")
+
+    pipe.enable_attention_slicing(1)
+    pipe.vae.enable_slicing()
 
     tokenizer = pipe.tokenizer
     text_encoder = pipe.text_encoder
@@ -151,6 +161,7 @@ if __name__ == "__main__":
 
     for epoch in range(EPOCHS):
         print(f"\n===== EPOCH {epoch + 1}/{EPOCHS} =====")
+        start_time = time.time()
         epoch_loss_pos_sum = 0.0
         epoch_loss_neg_sum = 0.0
         epoch_num_pos = 0
@@ -160,74 +171,95 @@ if __name__ == "__main__":
             loss_pos = None
             loss_neg = None
 
-            try:
-                src_img = pil_from_bytes(parse_img_field(row["source_img"])["bytes"])
-                tgt_img = pil_from_bytes(parse_img_field(row["target_img"])["bytes"])
-                prompt  = str(row["instruction"])
-                print(f"Prompt is: {prompt}")
+            src_img = pil_from_bytes(parse_img_field(row["source_img"])["bytes"])
+            tgt_img = pil_from_bytes(parse_img_field(row["target_img"])["bytes"])
+            prompt  = str(row["instruction"])
 
-                # Precompute target CLIP embedding (no grad needed)
-                tgt_clip = clip.clip_encode_from_pil(tgt_img)
+            # Precompute target CLIP embedding (no grad needed)
+            tgt_clip = clip.clip_encode_from_pil(tgt_img)
 
-                reject_clip = None
-                if USE_REJECT and "reject_img" in dataset.columns and not pd.isna(row["reject_img"]):
-                    rej_img = pil_from_bytes(parse_img_field(row["reject_img"])["bytes"])
-                    reject_clip = clip.clip_encode_from_pil(rej_img)
+            reject_clip = None
+            if USE_REJECT and "reject_img" in dataset.columns and not pd.isna(row["reject_img"]):
+                rej_img = pil_from_bytes(parse_img_field(row["reject_img"])["bytes"])
+                reject_clip = clip.clip_encode_from_pil(rej_img)
 
-                for step in range(STEPS_PER_IMAGE):
-                    optimizer.zero_grad(set_to_none=True)
+            for step in range(STEPS_PER_IMAGE):
+                optimizer.zero_grad(set_to_none=True)
 
-                    # inject and neologism embedding
-                    inject_neologism_embedding(text_encoder, target_token_ids, and_neologism_emb)
+                gen_lat = generate_with_gradients(
+                    pipe,
+                    src_img,
+                    prompt,
+                    num_inference_steps=NUM_STEPS_TRAIN, # or 30
+                    guidance_scale=7.5,
+                    image_guidance_scale=1.5,
+                    neologism_emb=and_neologism_emb,
+                    target_token_ids=target_token_ids
+                )
 
-                    with torch.autocast("cuda", dtype=DTYPE):
-                        gen_img = pipe(prompt, 
-                            image=src_img, 
-                            num_inference_steps=30,
-                            guidance_scale=7.5,
-                            image_guidance_scale=1.5
-                        ).images[0]
+                gen_lat = latents_to_tensor(pipe, gen_lat)
+                torch.cuda.empty_cache()
 
-                    gen_clip = clip.clip_encode_from_pil(gen_img)
+                if not torch.isfinite(gen_lat).all():
+                    print(f"[WARN] Row {idx}, step {step}: non-finite gen_lat; skipping.")
+                    continue
 
-                    # CLIP cosine losses (positive + reject)
-                    loss_pos = 1.0 - F.cosine_similarity(gen_clip, tgt_clip, dim=-1).mean()
+                # gen_img = decode_latents_to_image(pipe, gen_lat)
 
-                    if USE_REJECT and reject_clip is not None:
-                        loss_neg = 1.0 - F.cosine_similarity(gen_clip, reject_clip, dim=-1).mean()
-                        loss = loss_pos - REJECT_LAMBDA * loss_neg
-                    else:
-                        loss = loss_pos
+                gen_clip = clip.clip_encode_from_tensor(gen_lat)
 
-                    if not torch.isfinite(loss):
-                        print(f"[WARN] Row {idx}, step {step}: non-finite loss; skipping.")
-                        continue
+                del gen_lat
+                torch.cuda.empty_cache()
 
-                    # LOGGING (per-step accumulation)
-                    epoch_loss_pos_sum += loss_pos.item()
-                    epoch_num_pos += 1
-                    if USE_REJECT and reject_clip is not None and loss_neg is not None:
-                        epoch_loss_neg_sum += loss_neg.item()
-                        epoch_num_neg += 1
+                # CLIP cosine losses (positive + reject)
+                loss_pos = 1.0 - F.cosine_similarity(gen_clip, tgt_clip, dim=-1).mean()
 
-                    # Backprop only w.r.t. and_neologism_emb
-                    loss.backward()
-                    torch.nn.utils.clip_grad_norm_([and_neologism_emb], 1.0)
-                    optimizer.step()
+                if USE_REJECT and reject_clip is not None:
+                    loss_neg = 1.0 - F.cosine_similarity(gen_clip, reject_clip, dim=-1).mean()
+                    loss = loss_pos - REJECT_LAMBDA * loss_neg
+                else:
+                    loss = loss_pos
 
-                if (idx + 1) % 5 == 0 and loss_pos is not None:
-                    msg = f"[{idx+1}/{n_rows}] loss_pos={loss_pos.item():.4f}"
-                    if USE_REJECT and loss_neg is not None:
-                        msg += f" loss_neg={loss_neg.item():.4f}"
-                    msg += f" ||and_emb||={and_neologism_emb.norm().item():.3f}"
-                    print(msg)
+                if not torch.isfinite(loss):
+                    print(f"[WARN] Row {idx}, step {step}: non-finite loss; skipping.")
+                    continue
 
+                del gen_clip
+                torch.cuda.empty_cache()
+
+                # LOGGING (per-step accumulation)
+                epoch_loss_pos_sum += loss_pos.item()
+                epoch_num_pos += 1
+                if USE_REJECT and reject_clip is not None and loss_neg is not None:
+                    epoch_loss_neg_sum += loss_neg.item()
+                    epoch_num_neg += 1
+
+                # Backprop only wrt and_neologism_emb
+                loss.backward()
+                torch.nn.utils.clip_grad_norm_([and_neologism_emb], 1.0)
+                optimizer.step()
+                torch.cuda.empty_cache()
+
+            if (idx + 1) % 5 == 0 and loss_pos is not None:
+                msg = f"[{idx+1}/{MAX_TRAIN_IMAGES}] loss_pos={loss_pos.item():.4f}"
+                if USE_REJECT and loss_neg is not None:
+                    msg += f" loss_neg={loss_neg.item():.4f}"
+                msg += f" ||and_emb||={and_neologism_emb.norm().item():.8f}"
+                print(msg)
+
+                torch.cuda.empty_cache()
                 gc.collect()
-                if torch.cuda.is_available():
-                    torch.cuda.empty_cache()
 
-            except Exception as e:
-                print(f"Row {idx} failed during training: {e}")
+            # Aggressive cleanup after each step
+            del loss, loss_pos
+            if USE_REJECT and 'loss_neg' in locals():
+                del loss_neg
+
+            gc.collect()
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+
+        print(f"Time elapsed for epoch {epoch}: {time.time()-start_time}s")
 
         # Epoch-wise averages
         if epoch_num_pos > 0:
