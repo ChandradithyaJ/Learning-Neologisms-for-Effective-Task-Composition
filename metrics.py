@@ -4,6 +4,7 @@ import torch
 import torch.nn.functional as F
 from PIL import Image
 import numpy as np
+import open_clip
 
 def compute_ssim(generated_images, ground_truth_images):
     """
@@ -84,5 +85,40 @@ def DINO_similarity(generated_images, ground_truth_images):
     
     similarities = (gen_features * gt_features).sum(dim=-1)
     
+    avg_similarity = similarities.mean().item()
+    return avg_similarity
+
+
+def CLIP_similarity(generated_images, ground_truth_images):
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+    # Correct usage: separate model name and pretrained weights
+    model, _, preprocess = open_clip.create_model_and_transforms(
+        "ViT-B-32",
+        pretrained="laion2b_s34b_b79k"
+    )
+    model = model.to(device).eval()
+
+    gen_tensors = []
+    gt_tensors = []
+
+    for gen_path, gt_path in zip(generated_images, ground_truth_images):
+        gen_img = preprocess(Image.open(gen_path).convert("RGB"))
+        gt_img  = preprocess(Image.open(gt_path).convert("RGB"))
+
+        gen_tensors.append(gen_img)
+        gt_tensors.append(gt_img)
+
+    gen_batch = torch.stack(gen_tensors).to(device)
+    gt_batch  = torch.stack(gt_tensors).to(device)
+
+    with torch.no_grad():
+        gen_features = model.encode_image(gen_batch)
+        gt_features  = model.encode_image(gt_batch)
+
+        gen_features = F.normalize(gen_features, dim=-1)
+        gt_features  = F.normalize(gt_features, dim=-1)
+
+    similarities = (gen_features * gt_features).sum(dim=-1)  # cosine similarity
     avg_similarity = similarities.mean().item()
     return avg_similarity
