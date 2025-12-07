@@ -24,25 +24,21 @@ TARGET_WORDS = [" and"]
 
 # Learning / schedule
 LR = 1e-4
-EPOCHS = 20
+EPOCHS = 100
 STEPS_PER_IMAGE = 1
-
-# Resolution
-HEIGHT = 512
-WIDTH  = 512
 
 # Denoising
 NUM_STEPS_TRAIN = 8   # training steps for instruct_pix2pix
 NUM_STEPS_EVAL  = 15  # nicer previews (no grads)
 GUIDANCE = 1.0        # no CFG during training (true_cfg_scale)   
 
-MAX_TRAIN_IMAGES = 80
+MAX_TRAIN_IMAGES = 15
 
 # Reject loss
 USE_REJECT = False
 REJECT_LAMBDA = 0.00
 
-SAVE_DIR = f"./instruct_pix2pix/results/instruct_pix2pix_outputs_neologism_and_{STEPS_PER_IMAGE}stepsPerImage_{MAX_TRAIN_IMAGES}trainImages"
+SAVE_DIR = f"./instruct_pix2pix/results/instruct_pix2pix_outputs_neologism_and_{STEPS_PER_IMAGE}stepsPerImage_{MAX_TRAIN_IMAGES}trainImages_{EPOCHS}epochs_{NUM_STEPS_TRAIN}denoisingSteps"
 SAVE_EVERY_N = 1
 os.makedirs(SAVE_DIR, exist_ok=True)
 

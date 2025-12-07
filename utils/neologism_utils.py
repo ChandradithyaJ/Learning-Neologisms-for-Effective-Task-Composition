@@ -1,6 +1,6 @@
 import torch
 import torch.nn.functional as F
-from transformers import CLIPModel
+from transformers import CLIPModel, CLIPTokenizer
 import torchvision.transforms.functional as TF
 from PIL import Image
 import io
@@ -20,6 +20,7 @@ class ClipModel():
     def __init__(self, device='cpu'):
         clip_model_id = "openai/clip-vit-large-patch14"
 
+        self.clip_tokenizer = CLIPTokenizer.from_pretrained(clip_model_id)
         self.clip_model = CLIPModel.from_pretrained(clip_model_id).to(device)
         self.clip_model.eval()
         for p in self.clip_model.parameters():
@@ -58,3 +59,29 @@ class ClipModel():
         """
         t = TF.to_tensor(img).unsqueeze(0).to(self.device)  # [1,3,H,W] in [0,1]
         return self.clip_encode_from_tensor(t, no_grad=True)
+
+    def clip_encode_text(self, text, no_grad=False):
+        """
+        Encode text using the same CLIPModel as the image encoder.
+        Returns normalized CLIP text embeddings of shape [B, D].
+        """
+        # Tokenize with proper CLIP settings
+        tokens = self.clip_tokenizer(
+            text,
+            padding=True,
+            truncation=True,
+            max_length=77,
+            return_tensors="pt",
+        ).to(self.device)
+
+        if no_grad:
+            with torch.no_grad():
+                emb = self.clip_model.get_text_features(**tokens)
+        else:
+            with torch.set_grad_enabled(True):
+                emb = self.clip_model.get_text_features(**tokens)
+
+        # Normalize to match image encoding behavior
+        emb = F.normalize(emb, dim=-1)
+
+        return emb

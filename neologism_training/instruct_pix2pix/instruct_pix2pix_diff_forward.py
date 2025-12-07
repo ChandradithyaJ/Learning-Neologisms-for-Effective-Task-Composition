@@ -158,6 +158,82 @@ def generate_with_gradients(pipe, image, prompt, num_inference_steps=8, guidance
 
     return latents
 
+def inject_neologism_embedding(pipe, prompt, prompt_embeds, neologism_emb, target_token_ids):
+    # inject neologism embedding
+    if neologism_emb is not None and target_token_ids is not None and prompt is not None:
+        if isinstance(prompt, str):
+            prompts = [prompt]
+        else:
+            prompts = list(prompt)
+
+    # Tokenize pure text to know where "and" is in token space
+    encoded = pipe.tokenizer(
+        prompts,
+        add_special_tokens=True,
+        padding=True,
+        return_tensors="pt",
+    )
+    input_ids = encoded["input_ids"].to(prompt_embeds.device)  # (B_text, T_text)
+
+    B_text, T_text = input_ids.shape
+    B_emb, L, D = prompt_embeds.shape  # full sequence from encode_prompt
+
+    # Heuristic: assume last T_text tokens in prompt_embeds are text tokens
+    if T_text <= L:
+        text_start = L - T_text
+    else:
+        text_start = 0
+        T_text = min(T_text, L)
+
+    tok_ids_set = set(int(t) for t in target_token_ids)
+
+    # Build mask over sequence positions where token is "and"
+    mask = torch.zeros((B_emb, L), dtype=torch.bool, device=prompt_embeds.device)
+    for b in range(B_text):
+        for t in range(T_text):
+            if int(input_ids[b, t]) in tok_ids_set:
+                mask[b, text_start + t] = True
+
+    # Convert boolean mask to float for arithmetic
+    mask_f = mask.unsqueeze(-1).to(prompt_embeds.dtype)  # (B, L, 1)
+
+    neo_vec = neologism_emb.view(1, 1, -1).to(prompt_embeds.dtype).to(prompt_embeds.device)
+
+    # New embeddings:
+    #   E_new = E_base * (1 - mask) + neo_vec * mask
+    # This *always* reassigns prompt_embeds, so it always depends on neo_vec.
+    prompt_embeds = prompt_embeds * (1.0 - mask_f) + neo_vec * mask_f
+
+    del mask, mask_f, input_ids, encoded
+    torch.cuda.empty_cache()
+
+    return prompt_embeds
+
+def generate_with_gradients_lang(pipe, prompt, neologism_emb=None, target_token_ids=None):
+    """
+    Generate latents with gradient flow through the InstructPix2Pix pipeline.
+    Modified https://github.com/huggingface/diffusers/blob/v0.35.1/src/diffusers/pipelines/stable_diffusion/pipeline_stable_diffusion_instruct_pix2pix.py
+    """
+    pipe._guidance_scale = 7.5
+    pipe._image_guidance_scale = 1.0
+    device = pipe._execution_device
+
+    if prompt is not None and isinstance(prompt, str):
+        batch_size = 1
+    elif prompt is not None and isinstance(prompt, list):
+        batch_size = len(prompt)
+
+    # get prompt embeddings (w/o neologism)
+    prompt_embeds = pipe._encode_prompt(
+        prompt,
+        device,
+        1, # num_images_per_prompt
+        pipe.do_classifier_free_guidance,
+    )
+    prompt_embeds = inject_neologism_embedding(pipe, prompt, prompt_embeds, neologism_emb, target_token_ids)
+
+    return prompt_embeds  
+
 def decode_latents_to_image(pipe, latents):
     """
     Decode latents to PIL image.
