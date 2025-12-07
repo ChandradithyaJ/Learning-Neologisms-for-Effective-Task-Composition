@@ -57,7 +57,7 @@ def DINO_similarity(generated_images, ground_truth_images):
         'facebookresearch/dinov2', 
         'dinov2_vitb14'
     )
-    model.eval.cuda()
+    model.eval().cuda()
 
     # required preprocessing
     transform = transforms.Compose([
@@ -74,8 +74,8 @@ def DINO_similarity(generated_images, ground_truth_images):
     gt_imgs = []
     
     for gen_path, gt_path in zip(generated_images, ground_truth_images):
-        gen_img = Image.open(gen_path)
-        gt_img = Image.open(gt_path)
+        gen_img = Image.open(gen_path).convert('RGB')
+        gt_img = Image.open(gt_path).convert('RGB')
         
         gen_imgs.append(transform(gen_img))
         gt_imgs.append(transform(gt_img))
@@ -178,7 +178,7 @@ def CLIP_direction_similarity(generated_images, original_images, edit_prompts):
     return avg_similarity
 
 if __name__ == "__main__":
-    generated_images_folder = "../scratch/DL_data/images/instruct_pix2pix_outputs_neologism_and_1stepsPerImage_80trainImages_100epochs_8denoisingSteps_ckpt70"
+    generated_images_folder = "../scratch/DL_data/images/instruct_pix2pix_outputs_neologism_and_1stepsPerImage_80trainImages_100epochs_8denoisingSteps_ckpt100"
     ground_truth_images_folder = "../scratch/DL_data/images/final"
     original_images_folder = "../scratch/DL_data/images/original"
     edit_prompts_folder = "../scratch/DL_data/prompts/composite"
