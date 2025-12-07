@@ -181,7 +181,6 @@ if __name__ == "__main__":
             unpref_embeds = clip.clip_encode_text(unpref_response)
 
             # mean pooling
-            print(prompt_embeds.shape, pref_embeds.shape, unpref_embeds.shape)
             prompt_embeds = prompt_embeds.mean(dim=1)    # [1, 768]
             pref_embeds = pref_embeds.mean(dim=1)
             unpref_embeds = unpref_embeds.mean(dim=1)
@@ -189,10 +188,7 @@ if __name__ == "__main__":
             # Contrastive Preference Loss with a dot product scorer
             s_pos = (prompt_embeds * pref_embeds).sum(dim=-1)
             s_neg = (prompt_embeds * unpref_embeds).sum(dim=-1)
-            print(prompt_embeds, s_pos, s_neg)
             loss = -F.logsigmoid(s_pos - s_neg).mean()
-
-            print(loss.item())
 
             if not torch.isfinite(loss):
                 print(f"[WARN] Row {idx}, step {step}: non-finite loss; skipping.")

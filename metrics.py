@@ -5,6 +5,7 @@ import torch.nn.functional as F
 from PIL import Image
 import numpy as np
 import open_clip
+import os
 
 def compute_ssim(generated_images, ground_truth_images):
     """
@@ -122,3 +123,78 @@ def CLIP_similarity(generated_images, ground_truth_images):
     similarities = (gen_features * gt_features).sum(dim=-1)  # cosine similarity
     avg_similarity = similarities.mean().item()
     return avg_similarity
+
+def CLIP_direction_similarity(generated_images, original_images, edit_prompts):
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+    # Correct usage: separate model name and pretrained weights
+    model_name = "ViT-B-32"
+    model, _, preprocess = open_clip.create_model_and_transforms(
+        model_name,
+        pretrained="laion2b_s34b_b79k"
+    )
+    tokenizer = open_clip.get_tokenizer(model_name)
+    model = model.to(device).eval()
+
+    gen_tensors = []
+    gt_tensors = []
+    prompts = []
+
+    for gen_path, gt_path, prompt_path in zip(generated_images, ground_truth_images, edit_prompts):
+        gen_img = preprocess(Image.open(gen_path).convert("RGB"))
+        gt_img  = preprocess(Image.open(gt_path).convert("RGB"))
+        prompt = open(prompt_path, 'r').read()
+
+        gen_tensors.append(gen_img)
+        gt_tensors.append(gt_img)
+        prompts.append(prompt)
+
+    gen_batch = torch.stack(gen_tensors).to(device)
+    gt_batch  = torch.stack(gt_tensors).to(device)
+
+    with torch.no_grad():
+        gen_features = model.encode_image(gen_batch)
+        gt_features  = model.encode_image(gt_batch)
+
+        gen_features = F.normalize(gen_features, dim=-1)
+        gt_features  = F.normalize(gt_features, dim=-1)
+
+    # compute delta image direction
+    delta_img = gen_features - gt_features
+    delta_img = F.normalize(delta_img, dim=-1)
+
+    # encode prompts
+    with torch.no_grad():
+        text_tokens = tokenizer(prompts).to(device)
+        text_features = model.encode_text(text_tokens)
+        text_features = F.normalize(text_features, dim=-1)
+
+    # directional similarity
+    similarities = (delta_img * text_features).sum(dim=-1)
+    avg_similarity = similarities.mean().item()
+    return avg_similarity
+
+if __name__ == "__main__":
+    generated_images_folder = "../scratch/DL_data/images/instruct_pix2pix_outputs_neologism_and_1stepsPerImage_80trainImages_100epochs_8denoisingSteps_ckpt70"
+    ground_truth_images_folder = "../scratch/DL_data/images/final"
+    original_images = "../scratch/DL_data/images/original"
+    edit_prompts_folder = "../scratch/DL_data/prompts/composite"
+
+    generated_images = os.listdir(generated_images_folder)
+    ground_truth_images = os.listdir(ground_truth_images_folder)
+    edit_prompts = os.listdir(edit_prompts_folder)
+
+    ssim = compute_ssim(generated_images, ground_truth_images)
+    psnr = compute_psnr(generated_images, ground_truth_images)
+    dino = DINO_similarity(generated_images, ground_truth_images)
+    clip_sim = CLIP_similarity(generated_images, ground_truth_images)
+    clip_dir_sim = CLIP_direction_similarity(generated_images, ground_truth_images, edit_prompts)
+
+    print("=" * 20)
+    print("Metrics:", generated_images_folder)
+    print("SSIM", ssim)
+    print("PSNR", psnr)
+    print("DINO", dino)
+    print("CLIP Similarity", clip_sim)
+    print("CLIP Direction Similarity", clip_dir_sim)
+    print("=" * 20)

@@ -27,7 +27,7 @@ NUM_STEPS_TRAIN=8
 SAVE_DIR = f"./instruct_pix2pix/results/instruct_pix2pix_outputs_neologism_and_{STEPS_PER_IMAGE}stepsPerImage_{MAX_TRAIN_IMAGES}trainImages_{EPOCHS}epochs_{NUM_STEPS_TRAIN}denoisingSteps"
 
 # the and neologism embedding weights to use
-AND_NEOLOGISM_EPOCH = 100
+AND_NEOLOGISM_EPOCH = 80
 
 # device
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -92,7 +92,6 @@ if __name__ == "__main__":
         init_vec = base_vecs.mean(dim=0)
         orig_and_emb = init_vec.float().detach().clone().to(device)
         print(f"Initialized neologism from {len(target_token_ids)} base vectors.")
-
 
     ckpt_path = f"{SAVE_DIR}/and_neologism_epoch_{AND_NEOLOGISM_EPOCH:03d}.pt"
     ckpt = torch.load(ckpt_path, map_location="cpu")
