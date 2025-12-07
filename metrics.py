@@ -178,7 +178,7 @@ def CLIP_direction_similarity(generated_images, original_images, edit_prompts):
     return avg_similarity
 
 if __name__ == "__main__":
-    generated_images_folder = "../scratch/DL_data/images/instruct_pix2pix_outputs_neologism_and_1stepsPerImage_80trainImages_100epochs_8denoisingSteps_ckpt100"
+    generated_images_folder = "../scratch/DL_data/images/instructpix2pix_output"
     ground_truth_images_folder = "../scratch/DL_data/images/final"
     original_images_folder = "../scratch/DL_data/images/original"
     edit_prompts_folder = "../scratch/DL_data/prompts/composite"
@@ -188,7 +188,7 @@ if __name__ == "__main__":
     original_images = sorted(os.listdir(original_images_folder))
     edit_prompts = sorted(os.listdir(edit_prompts_folder))
 
-    generated_images = [os.path.join(generated_images_folder, f) for f in generated_images]
+    generated_images = [os.path.join(generated_images_folder, f) for f in generated_images if '_' not in f]
     ground_truth_images = [os.path.join(ground_truth_images_folder, f) for f in ground_truth_images]
     original_images = [os.path.join(ground_truth_images_folder, f) for f in original_images]
     edit_prompts = [os.path.join(edit_prompts_folder, f) for f in edit_prompts]
