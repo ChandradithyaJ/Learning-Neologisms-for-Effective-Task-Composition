@@ -21,7 +21,7 @@ import time
 
 TARGET_WORDS = [" and"]
 STEPS_PER_IMAGE = 1
-MAX_TRAIN_IMAGES = 80
+MAX_TRAIN_EXAMPLES = 100
 EPOCHS = 100
 NUM_STEPS_TRAIN=8
 SAVE_DIR = f"./instruct_pix2pix/results/instruct_pix2pix_outputs_neologism_and_{MAX_TRAIN_EXAMPLES}trainExamples_{EPOCHS}epochs_LANG"
@@ -102,7 +102,7 @@ if __name__ == "__main__":
     path_to_prompt = '../../scratch/DL_data/prompts/composite'
 
     input_path = f'{path_to_images}/original'
-    output_dir = f'{path_to_images}/instruct_pix2pix_outputs_neologism_and_{MAX_TRAIN_EXAMPLES}trainExamples_{EPOCHS}epochs_LANG'
+    output_dir = f'{path_to_images}/instruct_pix2pix_outputs_neologism_and_{MAX_TRAIN_EXAMPLES}trainExamples_{EPOCHS}epochs_ckpt{AND_NEOLOGISM_EPOCH}_LANG'
     os.makedirs(output_dir, exist_ok=True)
 
     csv_path = f'{output_dir}/times.csv'

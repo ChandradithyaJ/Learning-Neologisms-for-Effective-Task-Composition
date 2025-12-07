@@ -32,7 +32,7 @@ NUM_STEPS_TRAIN = 8   # training steps for instruct_pix2pix
 NUM_STEPS_EVAL  = 15  # nicer previews (no grads)
 GUIDANCE = 1.0        # no CFG during training (true_cfg_scale)   
 
-MAX_TRAIN_IMAGES = 15
+MAX_TRAIN_IMAGES = 60
 
 # Reject loss
 USE_REJECT = False

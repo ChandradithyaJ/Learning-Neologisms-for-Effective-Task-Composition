@@ -27,7 +27,7 @@ NUM_STEPS_TRAIN=8
 SAVE_DIR = f"./instruct_pix2pix/results/instruct_pix2pix_outputs_neologism_and_{STEPS_PER_IMAGE}stepsPerImage_{MAX_TRAIN_IMAGES}trainImages_{EPOCHS}epochs_{NUM_STEPS_TRAIN}denoisingSteps"
 
 # the and neologism embedding weights to use
-AND_NEOLOGISM_EPOCH = 90
+AND_NEOLOGISM_EPOCH = 100
 
 # device
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -102,7 +102,7 @@ if __name__ == "__main__":
     path_to_prompt = '../../scratch/DL_data/prompts/composite'
 
     input_path = f'{path_to_images}/original'
-    output_dir = f'{path_to_images}/instruct_pix2pix_outputs_neologism_and_{STEPS_PER_IMAGE}stepsPerImage_{MAX_TRAIN_IMAGES}trainImages_{EPOCHS}epochs_{NUM_STEPS_TRAIN}denoisingSteps'
+    output_dir = f'{path_to_images}/instruct_pix2pix_outputs_neologism_and_{STEPS_PER_IMAGE}stepsPerImage_{MAX_TRAIN_IMAGES}trainImages_{EPOCHS}epochs_{NUM_STEPS_TRAIN}denoisingSteps_ckpt{AND_NEOLOGISM_EPOCH}'
     os.makedirs(output_dir, exist_ok=True)
 
     csv_path = f'{output_dir}/times.csv'

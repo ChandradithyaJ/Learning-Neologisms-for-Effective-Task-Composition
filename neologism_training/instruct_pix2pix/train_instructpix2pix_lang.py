@@ -32,7 +32,7 @@ MAX_TRAIN_EXAMPLES = 100
 USE_REJECT = False
 REJECT_LAMBDA = 0.00
 
-SAVE_DIR = f"./instruct_pix2pix/results/instruct_pix2pix_outputs_neologism_and_{MAX_TRAIN_EXAMPLES}trainExamples_{EPOCHS}epochs_LANG"
+SAVE_DIR = f"./instruct_pix2pix/results/instruct_pix2pix_outputs_neologism_and_{MAX_TRAIN_EXAMPLES}trainExamples_{EPOCHS}epochs_LANG_temp"
 SAVE_EVERY_N = 1
 os.makedirs(SAVE_DIR, exist_ok=True)
 

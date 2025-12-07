@@ -1,0 +1,1 @@
+epoch=001  avg_pos_loss=0.206523  avg_neg_loss=nan  pos_steps=60  neg_steps=0
