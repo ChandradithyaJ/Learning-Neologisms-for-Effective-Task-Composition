@@ -1,3 +1,6 @@
 epoch=001  L2=0.205301  cosine=0.457265
 epoch=002  L2=0.273263  cosine=0.370038
 epoch=003  L2=0.324356  cosine=0.313428
+epoch=004  L2=0.379438  cosine=0.280471
+epoch=005  L2=0.431024  cosine=0.267217
+epoch=006  L2=0.445660  cosine=0.261171

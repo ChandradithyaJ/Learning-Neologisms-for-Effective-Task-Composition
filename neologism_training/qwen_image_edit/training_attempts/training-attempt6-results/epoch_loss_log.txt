@@ -2,3 +2,6 @@ epoch=000  avg_pos_loss=0.196231  avg_neg_loss=0.000000
 epoch=001  avg_abs_loss=0.161861  avg_rank_loss=0.050448  avg_norm_loss=0.000000  avg_mean_loss=0.000000  avg_orth_loss=0.000000  steps=100
 epoch=002  avg_abs_loss=0.174070  avg_rank_loss=0.059901  avg_norm_loss=0.000000  avg_mean_loss=0.000001  avg_orth_loss=0.000000  steps=100
 epoch=003  avg_abs_loss=0.172861  avg_rank_loss=0.057809  avg_norm_loss=0.000000  avg_mean_loss=0.000001  avg_orth_loss=0.000001  steps=100
+epoch=004  avg_abs_loss=0.168726  avg_rank_loss=0.054257  avg_norm_loss=0.000000  avg_mean_loss=0.000002  avg_orth_loss=0.000001  steps=100
+epoch=005  avg_abs_loss=0.145847  avg_rank_loss=0.036357  avg_norm_loss=0.000000  avg_mean_loss=0.000002  avg_orth_loss=0.000001  steps=100
+epoch=006  avg_abs_loss=0.155213  avg_rank_loss=0.050047  avg_norm_loss=0.000000  avg_mean_loss=0.000003  avg_orth_loss=0.000001  steps=100
