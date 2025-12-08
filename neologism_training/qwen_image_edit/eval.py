@@ -12,6 +12,7 @@ from dotenv import load_dotenv
 import pandas as pd
 import torch
 import torch.nn as nn
+import torch.nn.functional as F  # <-- NEW: for cosine similarity
 from PIL import Image
 from diffusers import QwenImageEditPipeline
 
@@ -36,7 +37,6 @@ DTYPE_DEFAULT = torch.bfloat16  # A100-friendly
 
 # ---------------------------
 # Simple shared utilities
-# (avoid importing train.py to prevent double-loading the pipeline)
 # ---------------------------
 def pil_from_bytes(b: bytes) -> Image.Image:
     return Image.open(io.BytesIO(b)).convert("RGB")
@@ -55,10 +55,16 @@ def parse_img_field(value):
 def load_neologism_ckpt(ckpt_path: str, device: str):
     """
     Load the trained neologism embedding and associated metadata.
+    Returns:
+        emb_param       : nn.Parameter [hidden_dim], on device (no grad)
+        token_ids       : List[int]
+        target_words    : Optional[List[str]]
+        epoch_idx       : Optional[int]
     """
     ckpt = torch.load(ckpt_path, map_location="cpu")
     token_ids: List[int] = ckpt.get("token_ids", [])
     target_words = ckpt.get("target_words", None)
+    epoch_idx = ckpt.get("epoch", None)
     emb = ckpt["embedding"]  # Tensor [hidden_dim]
 
     # put on device in fp32 (matches train)
@@ -69,9 +75,168 @@ def load_neologism_ckpt(ckpt_path: str, device: str):
     if target_words is not None:
         print(f"[NEOLOGISM] target_words: {target_words}")
     print(f"[NEOLOGISM] token_ids: {token_ids}")
+    if epoch_idx is not None:
+        print(f"[NEOLOGISM] trained_epoch: {epoch_idx}")
     print(f"[NEOLOGISM] emb norm: {emb_param.norm().item():.6f}")
 
-    return emb_param, token_ids
+    return emb_param, token_ids, target_words, epoch_idx
+
+
+# ---------------------------
+# LM probing: synonyms
+# ---------------------------
+@torch.no_grad()
+def generate_synonyms_with_lm(
+    pipeline,
+    word_str: str,
+    device: str,
+    override_emb: Optional[torch.Tensor] = None,
+    token_ids: Optional[List[int]] = None,
+    max_new_tokens: int = 64,
+    temperature: float = 0.7,
+    top_p: float = 0.9,
+):
+    """
+    Use the underlying Qwen2.5-VL LM to answer:
+        "Give me 5 synonyms for the word {word_str}"
+
+    If override_emb and token_ids are provided, we temporarily patch those
+    token IDs in the LM's embedding table with override_emb during generation,
+    then restore the originals afterward.
+    """
+    lm = pipeline.text_encoder  # Qwen2_5_VLForConditionalGeneration
+    tok = pipeline.tokenizer
+    lm.eval()
+
+    emb = lm.get_input_embeddings()
+    weight = emb.weight
+
+    # (Optional) temporary override for neologism
+    backup_vecs = None
+    if override_emb is not None and token_ids is not None and len(token_ids) > 0:
+        backup_vecs = weight[token_ids].clone()
+        neo_vec = override_emb.to(weight.device).to(weight.dtype)
+        for tid in token_ids:
+            weight[tid] = neo_vec
+
+    # build probe prompt
+    prompt = (
+        f"Give me 5 synonyms for the word {word_str}.\n"
+        "Synonyms:"
+    )
+    inputs = tok(prompt, return_tensors="pt").to(device)
+
+    generate_kwargs = dict(
+        max_new_tokens=max_new_tokens,
+        do_sample=True,
+        temperature=temperature,
+        top_p=top_p,
+    )
+    # Use eos_token_id if available
+    if tok.eos_token_id is not None:
+        generate_kwargs["eos_token_id"] = tok.eos_token_id
+
+    outputs = lm.generate(**inputs, **generate_kwargs)
+    text = tok.decode(outputs[0], skip_special_tokens=True)
+
+    # restore original embeddings if we patched them
+    if backup_vecs is not None:
+        for i, tid in enumerate(token_ids):
+            weight[tid] = backup_vecs[i]
+
+    return text
+
+
+# ---------------------------
+# Analysis: cosine + LM outputs → txt file
+# ---------------------------
+@torch.no_grad()
+def analyze_neologism_and_save(
+    pipeline,
+    and_neologism_emb: torch.Tensor,
+    target_token_ids: List[int],
+    target_words,
+    epoch_idx: Optional[int],
+    save_dir: str,
+):
+    """
+    1) Compute cosine similarity + L2 distance between:
+         - neologism embedding
+         - original 'and' embedding (mean over token_ids)
+    2) Ask LM for synonyms:
+         - baseline 'and' (no override)
+         - neologism version (temporary override)
+    3) Write everything to a text file in save_dir.
+    """
+    lm = pipeline.text_encoder
+    tok = pipeline.tokenizer
+
+    # get original embeddings for the token IDs (Qwen base weights)
+    emb_layer = lm.get_input_embeddings()
+    weight = emb_layer.weight
+    orig_vecs = weight[target_token_ids]  # [k, hidden_dim]
+    orig_mean = orig_vecs.mean(dim=0)
+
+    neo_vec = and_neologism_emb.detach().to(orig_mean.device).to(orig_mean.dtype)
+
+    cos_sim = F.cosine_similarity(neo_vec.unsqueeze(0), orig_mean.unsqueeze(0)).item()
+    l2_dist = torch.norm(neo_vec - orig_mean).item()
+
+    # Baseline LM answer (no override) – standard "and"
+    baseline_surface = "and"
+    baseline_syn = generate_synonyms_with_lm(
+        pipeline=pipeline,
+        word_str=baseline_surface,
+        device=next(lm.parameters()).device,
+        override_emb=None,
+        token_ids=None,
+    )
+
+    # Neologism LM answer: we use the same surface form as training target_words[0],
+    # but patch the embedding for token_ids with and_neologism_emb
+    if target_words is not None and len(target_words) > 0:
+        neologism_surface = target_words[0]
+    else:
+        # fallback: use "and" with a leading space if that was your training word
+        neologism_surface = " and"
+
+    neo_syn = generate_synonyms_with_lm(
+        pipeline=pipeline,
+        word_str=neologism_surface,
+        device=next(lm.parameters()).device,
+        override_emb=and_neologism_emb,
+        token_ids=target_token_ids,
+    )
+
+    # Write results to txt
+    os.makedirs(save_dir, exist_ok=True)
+    out_path = os.path.join(save_dir, "neologism_analysis.txt")
+    with open(out_path, "w") as f:
+        f.write("=== Neologism vs Original 'and' Analysis ===\n\n")
+        f.write(f"Checkpoint path: {os.path.abspath(save_dir)}\n")
+        if epoch_idx is not None:
+            f.write(f"Neologism trained epoch: {epoch_idx}\n")
+        f.write(f"Target words: {target_words}\n")
+        f.write(f"Target token IDs: {target_token_ids}\n\n")
+
+        f.write("Cosine similarity (neologism vs original 'and' embedding mean): "
+                f"{cos_sim:.6f}\n")
+        f.write("L2 distance      (neologism vs original 'and' embedding mean): "
+                f"{l2_dist:.6f}\n\n")
+
+        f.write("----- Baseline LM (original 'and') -----\n")
+        f.write('Prompt: "Give me 5 synonyms for the word and."\n')
+        f.write("Response:\n")
+        f.write(baseline_syn)
+        f.write("\n\n")
+
+        f.write("----- LM with Neologism Embedding -----\n")
+        f.write(f'Prompt: "Give me 5 synonyms for the word {neologism_surface}."\n')
+        f.write("Response:\n")
+        f.write(neo_syn)
+        f.write("\n")
+
+    print(f"[ANALYSIS] Saved neologism_analysis.txt to: {out_path}")
 
 
 # ---------------------------
@@ -162,7 +327,6 @@ def evaluate_and_save(
         except Exception as e:
             print(f"Eval row {idx} failed: {e}")
 
-        # light cleanup; remove if you want max speed
         gc.collect()
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
@@ -197,22 +361,22 @@ def main():
     print("device:", device)
     print("Using dtype:", dtype)
 
-    # 1) Load pipeline — like training, but only once
+    # 1) Load pipeline
     pipeline = QwenImageEditPipeline.from_pretrained(
         args.model,
         torch_dtype=dtype,
         device_map=None,
     ).to(device)
+    print(pipeline)
 
-    # Light memory helpers (same style as training)
+    # Light memory helpers
     if hasattr(pipeline, "enable_attention_slicing"):
         pipeline.enable_attention_slicing("max")
     if hasattr(pipeline, "vae") and hasattr(pipeline.vae, "enable_slicing"):
         pipeline.vae.enable_slicing()
-    if hasattr(pipeline.vae, "enable_tiling"):
+    if hasattr(pipeline, "vae") and hasattr(pipeline.vae, "enable_tiling"):
         pipeline.vae.enable_tiling()
 
-    # Efficient attention / xFormers
     try:
         if hasattr(pipeline.transformer, "set_attn_processor"):
             pipeline.transformer.set_attn_processor("sdpa")
@@ -231,10 +395,23 @@ def main():
             for p in getattr(pipeline, module_name).parameters():
                 p.requires_grad_(False)
 
-    # 2) Load neologism emb
-    and_neologism_emb, target_token_ids = load_neologism_ckpt(args.neologism_ckpt, device)
+    # 2) Load neologism emb + metadata
+    and_neologism_emb, target_token_ids, target_words, epoch_idx = load_neologism_ckpt(
+        args.neologism_ckpt,
+        device,
+    )
 
-    # 3) Load dataset
+    # 3) Analyze neologism vs original "and" and write txt
+    analyze_neologism_and_save(
+        pipeline=pipeline,
+        and_neologism_emb=and_neologism_emb,
+        target_token_ids=target_token_ids,
+        target_words=target_words,
+        epoch_idx=epoch_idx,
+        save_dir=args.save_dir,
+    )
+
+    # 4) Load dataset
     df = pd.read_csv(args.dataset)
     required_cols = {"source_img", "instruction"}
     missing = required_cols - set(df.columns)
