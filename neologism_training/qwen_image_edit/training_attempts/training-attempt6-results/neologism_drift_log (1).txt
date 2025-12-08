@@ -4,3 +4,4 @@ epoch=003  L2=0.324356  cosine=0.313428
 epoch=004  L2=0.379438  cosine=0.280471
 epoch=005  L2=0.431024  cosine=0.267217
 epoch=006  L2=0.445660  cosine=0.261171
+epoch=007  L2=0.466207  cosine=0.238225
