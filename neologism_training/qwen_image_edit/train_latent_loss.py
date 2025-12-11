@@ -14,12 +14,10 @@ import torch.nn.functional as F
 from PIL import Image
 from diffusers import QwenImageEditPipeline
 
-from qwen_diff_train_forward import qwen_edit_forward  # your custom forward
+from qwen_diff_train_forward import qwen_edit_forward  # custom forward
 
 
-# ===========================
-# 0) Config (A100 40GB)
-# ===========================
+
 load_dotenv()
 DATASET_PATH = "/content/sample_data/filtered_dataset.csv"
 
@@ -76,7 +74,6 @@ if hasattr(pipeline, "vae") and hasattr(pipeline.vae, "enable_slicing"):
 if hasattr(pipeline, "vae") and hasattr(pipeline.vae, "enable_tiling"):
     pipeline.vae.enable_tiling()
 
-# ✅ Make checkpointing actually apply to denoiser
 if hasattr(pipeline, "transformer") and hasattr(pipeline.transformer, "enable_gradient_checkpointing"):
     pipeline.transformer.enable_gradient_checkpointing()
 else:
@@ -85,14 +82,13 @@ else:
     except Exception:
         pass
 
-# ✅ Efficient attention (SDPA by default on torch>=2)
 try:
     if hasattr(pipeline.transformer, "set_attn_processor"):
         pipeline.transformer.set_attn_processor("sdpa")
 except Exception:
     pass
 
-# ✅ xFormers if installed (optional)
+
 try:
     if hasattr(pipeline.transformer, "enable_xformers_memory_efficient_attention"):
         pipeline.transformer.enable_xformers_memory_efficient_attention()
@@ -111,9 +107,7 @@ for module_name in ["text_encoder", "transformer", "vae", "image_encoder"]:
             p.requires_grad_(False)
 
 
-# ===========================
-# 2) Build neologism embedding for "and"
-# ===========================
+
 emb_layer = text_encoder.get_input_embeddings()
 emb_dtype = emb_layer.weight.dtype
 print(f"Text embedding dim: {emb_layer.weight.shape[-1]}, dtype: {emb_dtype}")
@@ -132,16 +126,13 @@ with torch.no_grad():
     orig_and_emb = init_vec.float().detach().clone().to(device)
     print(f"Initialized neologism from {len(target_token_ids)} base vectors.")
 
-# ✅ Learn neologism in fp32 for stability, rest of model bf16
 and_neologism_emb = nn.Parameter(init_vec.float().clone().detach()).to(device)
 and_neologism_emb.requires_grad_(True)
 
 opt = torch.optim.AdamW([and_neologism_emb], lr=LR)
 
 
-# ===========================
-# 3) Utilities
-# ===========================
+
 def pil_from_bytes(b: bytes) -> Image.Image:
     return Image.open(io.BytesIO(b)).convert("RGB")
 
@@ -196,9 +187,7 @@ def neologism_distance_stats():
     cosine_sim = F.cosine_similarity(cur.unsqueeze(0), orig.unsqueeze(0)).item()
     return l2_dist, cosine_sim
 
-# ===========================
-# 4) Training loop (LATENT LOSS)
-# ===========================
+
 def train_on_df(df: pd.DataFrame, epochs: int = EPOCHS, steps_per_image: int = STEPS_PER_IMAGE):
     n_rows = len(df)
 
@@ -339,9 +328,7 @@ def train_on_df(df: pd.DataFrame, epochs: int = EPOCHS, steps_per_image: int = S
 
 
 
-# ===========================
-# 5) Evaluation pass (save outputs)
-# ===========================
+
 @torch.no_grad()
 def evaluate_and_save(df: pd.DataFrame, subdir: str = "eval"):
     out_dir = os.path.join(SAVE_DIR, subdir)
@@ -352,9 +339,6 @@ def evaluate_and_save(df: pd.DataFrame, subdir: str = "eval"):
             src_img = pil_from_bytes(parse_img_field(row["source_img"])["bytes"])
             prompt  = str(row["instruction"])
 
-            # ---------
-            # (A) BASELINE: no neologism injection
-            # ---------
             out_base = qwen_edit_forward(
                 pipeline,
                 image=src_img,
@@ -371,9 +355,6 @@ def evaluate_and_save(df: pd.DataFrame, subdir: str = "eval"):
             )
             img_base = out_base.images[0]
 
-            # ---------
-            # (B) NEOLOGISM: inject trained embedding
-            # ---------
             out_neo = qwen_edit_forward(
                 pipeline,
                 image=src_img,
@@ -390,9 +371,6 @@ def evaluate_and_save(df: pd.DataFrame, subdir: str = "eval"):
             )
             img_neo = out_neo.images[0]
 
-            # ---------
-            # Save images + prompt
-            # ---------
             base_path = os.path.join(out_dir, f"img_{idx:05d}_base.png")
             neo_path  = os.path.join(out_dir, f"img_{idx:05d}_neo.png")
             cmp_path  = os.path.join(out_dir, f"img_{idx:05d}_cmp.png")
@@ -401,7 +379,6 @@ def evaluate_and_save(df: pd.DataFrame, subdir: str = "eval"):
             img_base.save(base_path)
             img_neo.save(neo_path)
 
-            # optional side-by-side comparison
             w, h = img_base.size
             cmp = Image.new("RGB", (w * 2, h))
             cmp.paste(img_base, (0, 0))
@@ -438,7 +415,7 @@ def compute_initial_epoch_loss(df):
                     image=src_img,
                     prompt=str(row["instruction"]),
                     negative_prompt=None,
-                    num_inference_steps=NUM_STEPS_TRAIN,      # <--- very low steps
+                    num_inference_steps=NUM_STEPS_TRAIN,     
                     true_cfg_scale=GUIDANCE,
                     height=HEIGHT,
                     width=WIDTH,
@@ -485,9 +462,6 @@ def compute_initial_epoch_loss(df):
 
 
 
-# ===========================
-# 6) Main
-# ===========================
 if __name__ == "__main__":
     df = pd.read_csv(DATASET_PATH)
     required_cols = {"source_img", "target_img", "reject_img", "instruction"}

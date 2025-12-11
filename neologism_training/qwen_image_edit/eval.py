@@ -19,9 +19,7 @@ from diffusers import QwenImageEditPipeline
 from qwen_diff_train_forward import qwen_edit_forward  # your custom forward
 
 
-# ---------------------------
-# Defaults (match train.py where relevant)
-# ---------------------------
+
 MODEL_PATH_DEFAULT   = "Qwen/Qwen-Image-Edit"
 DATASET_PATH_DEFAULT = "/content/sample_data/filtered_dataset.csv"
 SAVE_DIR_DEFAULT     = "./Neologism_training/outputs_neologism_and"
@@ -35,9 +33,6 @@ CFG_EVAL_DEFAULT       = 4.0
 DTYPE_DEFAULT = torch.bfloat16  # A100-friendly
 
 
-# ---------------------------
-# Simple shared utilities
-# ---------------------------
 def pil_from_bytes(b: bytes) -> Image.Image:
     return Image.open(io.BytesIO(b)).convert("RGB")
 
@@ -49,9 +44,7 @@ def parse_img_field(value):
     raise TypeError(f"Unexpected type for image field: {type(value)}")
 
 
-# ---------------------------
-# Load neologism ckpt
-# ---------------------------
+
 def load_neologism_ckpt(ckpt_path: str, device: str):
     """
     Load the trained neologism embedding and associated metadata.
@@ -65,9 +58,9 @@ def load_neologism_ckpt(ckpt_path: str, device: str):
     token_ids: List[int] = ckpt.get("token_ids", [])
     target_words = ckpt.get("target_words", None)
     epoch_idx = ckpt.get("epoch", None)
-    emb = ckpt["embedding"]  # Tensor [hidden_dim]
+    emb = ckpt["embedding"]  
 
-    # put on device in fp32 (matches train)
+    
     emb_param = nn.Parameter(emb.float().to(device))
     emb_param.requires_grad_(False)
 
@@ -82,9 +75,6 @@ def load_neologism_ckpt(ckpt_path: str, device: str):
     return emb_param, token_ids, target_words, epoch_idx
 
 
-# ---------------------------
-# LM probing: synonyms
-# ---------------------------
 @torch.no_grad()
 def generate_synonyms_with_lm(
     pipeline,
@@ -111,7 +101,6 @@ def generate_synonyms_with_lm(
     emb = lm.get_input_embeddings()
     weight = emb.weight
 
-    # (Optional) temporary override for neologism
     backup_vecs = None
     if override_emb is not None and token_ids is not None and len(token_ids) > 0:
         backup_vecs = weight[token_ids].clone()
@@ -119,7 +108,6 @@ def generate_synonyms_with_lm(
         for tid in token_ids:
             weight[tid] = neo_vec
 
-    # build probe prompt
     prompt = (
         f"Give me 5 synonyms for the word {word_str}.\n"
         "Synonyms:"
@@ -132,14 +120,13 @@ def generate_synonyms_with_lm(
         temperature=temperature,
         top_p=top_p,
     )
-    # Use eos_token_id if available
+
     if tok.eos_token_id is not None:
         generate_kwargs["eos_token_id"] = tok.eos_token_id
 
     outputs = lm.generate(**inputs, **generate_kwargs)
     text = tok.decode(outputs[0], skip_special_tokens=True)
 
-    # restore original embeddings if we patched them
     if backup_vecs is not None:
         for i, tid in enumerate(token_ids):
             weight[tid] = backup_vecs[i]
@@ -147,9 +134,7 @@ def generate_synonyms_with_lm(
     return text
 
 
-# ---------------------------
-# Analysis: cosine + LM outputs → txt file
-# ---------------------------
+
 @torch.no_grad()
 def analyze_neologism_and_save(
     pipeline,
@@ -174,7 +159,7 @@ def analyze_neologism_and_save(
     # get original embeddings for the token IDs (Qwen base weights)
     emb_layer = lm.get_input_embeddings()
     weight = emb_layer.weight
-    orig_vecs = weight[target_token_ids]  # [k, hidden_dim]
+    orig_vecs = weight[target_token_ids]  
     orig_mean = orig_vecs.mean(dim=0)
 
     neo_vec = and_neologism_emb.detach().to(orig_mean.device).to(orig_mean.dtype)
@@ -182,7 +167,6 @@ def analyze_neologism_and_save(
     cos_sim = F.cosine_similarity(neo_vec.unsqueeze(0), orig_mean.unsqueeze(0)).item()
     l2_dist = torch.norm(neo_vec - orig_mean).item()
 
-    # Baseline LM answer (no override) – standard "and"
     baseline_surface = "and"
     baseline_syn = generate_synonyms_with_lm(
         pipeline=pipeline,
@@ -192,12 +176,10 @@ def analyze_neologism_and_save(
         token_ids=None,
     )
 
-    # Neologism LM answer: we use the same surface form as training target_words[0],
-    # but patch the embedding for token_ids with and_neologism_emb
+
     if target_words is not None and len(target_words) > 0:
         neologism_surface = target_words[0]
     else:
-        # fallback: use "and" with a leading space if that was your training word
         neologism_surface = " and"
 
     neo_syn = generate_synonyms_with_lm(
@@ -208,7 +190,7 @@ def analyze_neologism_and_save(
         token_ids=target_token_ids,
     )
 
-    # Write results to txt
+
     os.makedirs(save_dir, exist_ok=True)
     out_path = os.path.join(save_dir, "neologism_analysis.txt")
     with open(out_path, "w") as f:
@@ -239,9 +221,7 @@ def analyze_neologism_and_save(
     print(f"[ANALYSIS] Saved neologism_analysis.txt to: {out_path}")
 
 
-# ---------------------------
-# Eval + save (baseline vs neo)
-# ---------------------------
+
 @torch.no_grad()
 def evaluate_and_save(
     df: pd.DataFrame,
@@ -263,9 +243,7 @@ def evaluate_and_save(
             src_img = pil_from_bytes(parse_img_field(row["source_img"])["bytes"])
             prompt  = str(row["instruction"])
 
-            # ---------
-            # (A) BASELINE: no neologism injection
-            # ---------
+
             out_base = qwen_edit_forward(
                 pipeline,
                 image=src_img,
@@ -282,9 +260,7 @@ def evaluate_and_save(
             )
             img_base = out_base.images[0]
 
-            # ---------
-            # (B) NEOLOGISM: inject trained embedding
-            # ---------
+
             out_neo = qwen_edit_forward(
                 pipeline,
                 image=src_img,
@@ -301,9 +277,7 @@ def evaluate_and_save(
             )
             img_neo = out_neo.images[0]
 
-            # ---------
-            # Save images + prompt
-            # ---------
+
             base_path = os.path.join(out_dir, f"img_{idx:05d}_base.png")
             neo_path  = os.path.join(out_dir, f"img_{idx:05d}_neo.png")
             cmp_path  = os.path.join(out_dir, f"img_{idx:05d}_cmp.png")
@@ -312,7 +286,6 @@ def evaluate_and_save(
             img_base.save(base_path)
             img_neo.save(neo_path)
 
-            # side-by-side comparison
             w, h = img_base.size
             cmp = Image.new("RGB", (w * 2, h))
             cmp.paste(img_base, (0, 0))
@@ -332,9 +305,6 @@ def evaluate_and_save(
             torch.cuda.empty_cache()
 
 
-# ---------------------------
-# Main
-# ---------------------------
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--dataset", type=str, default=DATASET_PATH_DEFAULT)
@@ -361,7 +331,6 @@ def main():
     print("device:", device)
     print("Using dtype:", dtype)
 
-    # 1) Load pipeline
     pipeline = QwenImageEditPipeline.from_pretrained(
         args.model,
         torch_dtype=dtype,
@@ -369,7 +338,6 @@ def main():
     ).to(device)
     print(pipeline)
 
-    # Light memory helpers
     if hasattr(pipeline, "enable_attention_slicing"):
         pipeline.enable_attention_slicing("max")
     if hasattr(pipeline, "vae") and hasattr(pipeline.vae, "enable_slicing"):
@@ -389,19 +357,19 @@ def main():
     except Exception:
         pass
 
-    # Freeze everything (no grads in eval)
+
     for module_name in ["text_encoder", "transformer", "vae", "image_encoder"]:
         if hasattr(pipeline, module_name):
             for p in getattr(pipeline, module_name).parameters():
                 p.requires_grad_(False)
 
-    # 2) Load neologism emb + metadata
+
     and_neologism_emb, target_token_ids, target_words, epoch_idx = load_neologism_ckpt(
         args.neologism_ckpt,
         device,
     )
 
-    # 3) Analyze neologism vs original "and" and write txt
+
     analyze_neologism_and_save(
         pipeline=pipeline,
         and_neologism_emb=and_neologism_emb,
@@ -411,7 +379,7 @@ def main():
         save_dir=args.save_dir,
     )
 
-    # 4) Load dataset
+    #Load data
     df = pd.read_csv(args.dataset)
     required_cols = {"source_img", "instruction"}
     missing = required_cols - set(df.columns)
