@@ -1,0 +1,7 @@
+First generatated images of 
+- Task A
+- Task B
+
+Now loss is computed as W_AB * loss(gen,A+B) + W_A * loss(gen,A) + W_B * loss(gen,B)
+
+Additionally added regularization to make sure neologism doesn't drift too far away from language manifold

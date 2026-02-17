@@ -1,0 +1,12 @@
+epoch=001  L2=0.205301  cosine=0.457265
+epoch=002  L2=0.273263  cosine=0.370038
+epoch=003  L2=0.324356  cosine=0.313428
+epoch=004  L2=0.379438  cosine=0.280471
+epoch=005  L2=0.431024  cosine=0.267217
+epoch=006  L2=0.445660  cosine=0.261171
+epoch=007  L2=0.466207  cosine=0.238225
+epoch=008  L2=0.492085  cosine=0.228567
+epoch=009  L2=0.519773  cosine=0.215679
+epoch=010  L2=0.543474  cosine=0.197547
+epoch=011  L2=0.576187  cosine=0.188699
+epoch=012  L2=0.611614  cosine=0.172671

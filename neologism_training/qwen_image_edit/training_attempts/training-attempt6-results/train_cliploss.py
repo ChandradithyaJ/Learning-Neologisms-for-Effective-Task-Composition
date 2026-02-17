@@ -14,47 +14,50 @@ import torch.nn.functional as F
 from PIL import Image
 from diffusers import QwenImageEditPipeline
 
-
+# NEW: CLIP + torchvision for image preprocessing
 from transformers import CLIPModel
 import torchvision.transforms.functional as TF
 
-from qwen_diff_train_forward import qwen_edit_forward  # custom forward for training
+from qwen_diff_train_forward import qwen_edit_forward  # your custom forward
 
 
-
+# ===========================
+# 0) Config (A100 40GB)
+# ===========================
 load_dotenv()
 DATASET_PATH = "/content/sample_data/filtered_dataset.csv"
 
-MODEL_PATH = "Qwen/Qwen-Image-Edit"  
+MODEL_PATH = "Qwen/Qwen-Image-Edit"  # non-4bit official base
 
 TARGET_WORDS = [" and"]
 
+# Learning / schedule
 LR = 3e-4
 EPOCHS = 20
-STEPS_PER_IMAGE = 1   
+STEPS_PER_IMAGE = 1   # safe on A100; bump to 2–3 if you want
 
 SAVE_EVERY_N = 1
 
-
+# Resolution
 HEIGHT = 512
 WIDTH  = 512
 
 # Denoising
-NUM_STEPS_TRAIN = 8   
-NUM_STEPS_EVAL  = 15  
-GUIDANCE = 1.0        # no CFG during training 
+NUM_STEPS_TRAIN = 8   # training steps for qwen_edit_forward
+NUM_STEPS_EVAL  = 15  # nicer previews (no grads)
+GUIDANCE = 1.0        # no CFG during training (true_cfg_scale)
 
-MAX_TRAIN_IMAGES = 100 
+MAX_TRAIN_IMAGES = 100  # set int for debug
 
-
+# Reject loss (disabled for now)
 USE_REJECT = False
 REJECT_LAMBDA = 0.00
 
+# Relative loss hyperparams (for AB target vs baseline)
+MARGIN = 0.02       # how much better than baseline we want neo to be
+LAMBDA_ABS = 0.5    # weight for absolute CLIP loss vs ranking term
 
-MARGIN = 0.02       
-LAMBDA_ABS = 0.5  
-
-
+# Multi-target CLIP weights (A+B, A-only, B-only)
 W_AB = 0.5
 W_A  = 0.25
 W_B  = 0.25
@@ -65,18 +68,21 @@ os.makedirs(SAVE_DIR, exist_ok=True)
 device = "cuda" if torch.cuda.is_available() else "cpu"
 print("device:", device)
 
-
+# ✅ A100 supports bf16; use it always for Qwen pipeline
 DTYPE = torch.bfloat16
 print("Using dtype:", DTYPE)
 
 
+# ===========================
+# 1) Load pipeline (frozen)
+# ===========================
 pipeline = QwenImageEditPipeline.from_pretrained(
     MODEL_PATH,
     torch_dtype=DTYPE,
     device_map=None,
 ).to(device)
 
-# Memory helpers (lightweight, safe) (source: from chatGPT)
+# Memory helpers (lightweight, safe)
 if hasattr(pipeline, "enable_attention_slicing"):
     pipeline.enable_attention_slicing("max")
 if hasattr(pipeline, "vae") and hasattr(pipeline.vae, "enable_slicing"):
@@ -84,6 +90,7 @@ if hasattr(pipeline, "vae") and hasattr(pipeline.vae, "enable_slicing"):
 if hasattr(pipeline, "vae") and hasattr(pipeline.vae, "enable_tiling"):
     pipeline.vae.enable_tiling()
 
+# ✅ Make checkpointing actually apply to denoiser
 if hasattr(pipeline, "transformer") and hasattr(pipeline.transformer, "enable_gradient_checkpointing"):
     pipeline.transformer.enable_gradient_checkpointing()
 else:
@@ -92,12 +99,14 @@ else:
     except Exception:
         pass
 
+# ✅ Efficient attention (SDPA by default on torch>=2)
 try:
     if hasattr(pipeline.transformer, "set_attn_processor"):
         pipeline.transformer.set_attn_processor("sdpa")
 except Exception:
     pass
 
+# ✅ xFormers if installed (optional)
 try:
     if hasattr(pipeline.transformer, "enable_xformers_memory_efficient_attention"):
         pipeline.transformer.enable_xformers_memory_efficient_attention()
@@ -109,21 +118,25 @@ tokenizer = pipeline.tokenizer
 text_encoder = pipeline.text_encoder
 vae = pipeline.vae
 
+# Freeze everything except our neologism embedding
 for module_name in ["text_encoder", "transformer", "vae", "image_encoder"]:
     if hasattr(pipeline, module_name):
         for p in getattr(pipeline, module_name).parameters():
             p.requires_grad_(False)
 
 
-
+# ===========================
+# 1.5) CLIP model for loss
+# ===========================
+# We'll use CLIP image embeddings and cosine similarity.
 CLIP_MODEL_NAME = "openai/clip-vit-large-patch14"
 
 clip_model = CLIPModel.from_pretrained(CLIP_MODEL_NAME).to(device)
 clip_model.eval()
 for p in clip_model.parameters():
-    p.requires_grad_(False) 
+    p.requires_grad_(False)  # we don't train CLIP
 
-
+# CLIP normalization constants (standard OpenAI CLIP)
 CLIP_MEAN = torch.tensor([0.48145466, 0.4578275, 0.40821073], device=device).view(1, 3, 1, 1)
 CLIP_STD  = torch.tensor([0.26862954, 0.26130258, 0.27577711], device=device).view(1, 3, 1, 1)
 
@@ -151,7 +164,7 @@ def clip_encode_from_pil(img: Image.Image) -> torch.Tensor:
     """
     Convenience wrapper for target/reject images (no grad needed).
     """
-    t = TF.to_tensor(img).unsqueeze(0).to(device)  
+    t = TF.to_tensor(img).unsqueeze(0).to(device)  # [1,3,H,W] in [0,1]
     return clip_encode_from_tensor(t, no_grad=True)
 
 
@@ -160,13 +173,15 @@ def latents_to_image_tensor(latents: torch.Tensor) -> torch.Tensor:
     Convert Qwen 'latent' output (B, C, H, W) from qwen_edit_forward
     into an image tensor [B, 3, H, W] in [0,1] for CLIP loss.
     """
-    latents = latents.to(vae.dtype).unsqueeze(2)  
-    decoded = vae.decode(latents, return_dict=False)[0][:, :, 0] 
-    img = (decoded / 2 + 0.5).clamp(0, 1)  
+    latents = latents.to(vae.dtype).unsqueeze(2)  # (B, C, H, W) -> (B, C, 1, H, W)
+    decoded = vae.decode(latents, return_dict=False)[0][:, :, 0]  # (B, 3, H, W)
+    img = (decoded / 2 + 0.5).clamp(0, 1)  # [-1,1] -> [0,1]
     return img
 
 
-
+# ===========================
+# 2) Build neologism embedding for "and"
+# ===========================
 emb_layer = text_encoder.get_input_embeddings()
 emb_dtype = emb_layer.weight.dtype
 print(f"Text embedding dim: {emb_layer.weight.shape[-1]}, dtype: {emb_dtype}")
@@ -179,15 +194,16 @@ with torch.no_grad():
 target_token_ids = sorted(set(target_token_ids))
 print(f"Target token IDs for {TARGET_WORDS}: {target_token_ids}")
 
-# Initialize neologism to a semantically vacuous vector (vocab mean)
+# 🔁 Initialize neologism to a semantically vacuous vector (vocab mean)
 with torch.no_grad():
+    # (Optional) keep the original "and" semantic embedding just for reference
     and_vecs = emb_layer.weight[target_token_ids].to(device=device, dtype=emb_dtype)
-    orig_and_semantic = and_vecs.mean(dim=0).clone()  
+    orig_and_semantic = and_vecs.mean(dim=0).clone()  # not used for init
 
-    # Semantically vacuous vector
+    # Semantically vacuous vector: mean over the *entire* vocab
     vocab_mean = emb_layer.weight.mean(dim=0).to(device=device, dtype=emb_dtype)
 
-    #neologism start (vacuous)
+    # This is now the "reference" neologism start (vacuous)
     orig_and_emb = vocab_mean.float().detach().clone().to(device)
 
     print(
@@ -195,26 +211,31 @@ with torch.no_grad():
         f"(semantically vacuous), target_token_ids={target_token_ids}"
     )
 
-
+# ✅ Learn neologism in fp32 for stability, rest of model bf16
 and_neologism_emb = nn.Parameter(orig_and_emb.float().clone().detach()).to(device)
 and_neologism_emb.requires_grad_(True)
 
 opt = torch.optim.AdamW([and_neologism_emb], lr=LR)
 
-
+# ===========================
+# 2.1) Manifold regularization (Version A)
+# ===========================
 with torch.no_grad():
+    # typical norm of token embeddings (cluster radius)
     vocab_norm_mean = emb_layer.weight.norm(dim=1).mean().item()
 
-
+# fp32 vocab mean for manifold attraction
 vocab_mean_fp32 = vocab_mean.float().detach().clone().to(device)
 
 # Regularization hyperparams
-LAMBDA_NORM   = 0.10  
-LAMBDA_MEAN   = 0.05  
-LAMBDA_ORTHO  = 0.02   
+LAMBDA_NORM   = 0.10   # hinge on ||e|| vs vocab_norm_mean
+LAMBDA_MEAN   = 0.05   # pull toward vocab_mean
+LAMBDA_ORTHO  = 0.02   # keep close to initialization (orig_and_emb)
 
 
-
+# ===========================
+# 3) Utilities
+# ===========================
 def pil_from_bytes(b: bytes) -> Image.Image:
     return Image.open(io.BytesIO(b)).convert("RGB")
 
@@ -253,7 +274,9 @@ def neologism_distance_stats():
     return l2_dist, cosine_sim
 
 
-
+# ===========================
+# 3.25) Split instruction into Task A / Task B
+# ===========================
 def split_instruction_on_and(instr: str) -> Tuple[Optional[str], Optional[str]]:
     """
     Very simple heuristic: split on first ' and '.
@@ -270,7 +293,9 @@ def split_instruction_on_and(instr: str) -> Tuple[Optional[str], Optional[str]]:
     return taskA, taskB
 
 
-
+# ===========================
+# 3.5) Precompute CLIP(target) and baseline CLIP sims
+# ===========================
 @torch.no_grad()
 def precompute_target_and_baseline(df: pd.DataFrame):
     n_rows = len(df)
@@ -283,9 +308,11 @@ def precompute_target_and_baseline(df: pd.DataFrame):
             src_img = pil_from_bytes(parse_img_field(row["source_img"])["bytes"])
             tgt_img = pil_from_bytes(parse_img_field(row["target_img"])["bytes"])
 
-            tgt_clip = clip_encode_from_pil(tgt_img)  
+            # Target CLIP embedding (A+B target)
+            tgt_clip = clip_encode_from_pil(tgt_img)  # [1,D]
             tgt_clips[idx] = tgt_clip.squeeze(0).cpu()
 
+            # Baseline generation (original 'and', i.e., no neologism override)
             with torch.autocast("cuda", dtype=DTYPE):
                 out_base = qwen_edit_forward(
                     pipeline,
@@ -298,12 +325,12 @@ def precompute_target_and_baseline(df: pd.DataFrame):
                     width=WIDTH,
                     output_type="latent",
                     return_dict=True,
-                    and_neologism_emb=None,  
+                    and_neologism_emb=None,   # <-- baseline behavior
                     target_token_ids=None,
                 )
             lat_base = out_base.images
             img_base = latents_to_image_tensor(lat_base)
-            base_clip = clip_encode_from_tensor(img_base, no_grad=True)
+            base_clip = clip_encode_from_tensor(img_base, no_grad=True)  # [1,D]
 
             sim_base = F.cosine_similarity(base_clip, tgt_clip, dim=-1).mean().item()
             baseline_sims[idx] = sim_base
@@ -318,6 +345,9 @@ def precompute_target_and_baseline(df: pd.DataFrame):
     return tgt_clips, baseline_sims
 
 
+# ===========================
+# 3.6) Precompute pseudo Task A / Task B CLIP targets
+# ===========================
 @torch.no_grad()
 def precompute_single_task_targets(df: pd.DataFrame):
     """
@@ -339,10 +369,12 @@ def precompute_single_task_targets(df: pd.DataFrame):
             instr = str(row["instruction"])
             taskA, taskB = split_instruction_on_and(instr)
             if taskA is None:
+                # Can't parse A/B cleanly; skip this row for multi-target
                 continue
 
             src_img = pil_from_bytes(parse_img_field(row["source_img"])["bytes"])
 
+            # -------- A-only generation --------
             prompt_A = (
                 f"{taskA}. Only apply this change; do NOT {taskB.lower()}."
             )
@@ -358,13 +390,14 @@ def precompute_single_task_targets(df: pd.DataFrame):
                     width=WIDTH,
                     output_type="pil",
                     return_dict=True,
-                    and_neologism_emb=None,   
+                    and_neologism_emb=None,   # baseline behavior
                     target_token_ids=None,
                 )
             imgA = outA.images[0]
-            clipA = clip_encode_from_pil(imgA)  
+            clipA = clip_encode_from_pil(imgA)  # [1,D]
             tgtA_clips[idx] = clipA.squeeze(0).cpu()
 
+            # -------- B-only generation --------
             prompt_B = (
                 f"{taskB}. Only apply this change; do NOT {taskA.lower()}."
             )
@@ -380,7 +413,7 @@ def precompute_single_task_targets(df: pd.DataFrame):
                     width=WIDTH,
                     output_type="pil",
                     return_dict=True,
-                    and_neologism_emb=None,  
+                    and_neologism_emb=None,   # baseline behavior
                     target_token_ids=None,
                 )
             imgB = outB.images[0]
@@ -397,6 +430,10 @@ def precompute_single_task_targets(df: pd.DataFrame):
     return tgtA_clips, tgtB_clips
 
 
+# ===========================
+# 4) Training loop
+#    (CLIP + ranking vs baseline + multi-target + manifold reg)
+# ===========================
 def train_on_df(
     df: pd.DataFrame,
     tgt_clips,
@@ -408,7 +445,7 @@ def train_on_df(
 ):
     n_rows = len(df)
 
-    # tokenizer sanity check
+    # One-time tokenizer sanity check
     first_prompt = str(df.iloc[0]["instruction"])
     enc = tokenizer(first_prompt, add_special_tokens=True)
     print("=== TOKENIZER SANITY CHECK ===")
@@ -438,9 +475,11 @@ def train_on_df(
                 prompt  = str(row["instruction"])
                 print(f"Prompt is: {prompt}")
 
-                tgt_clip = tgt_clips[idx].unsqueeze(0).to(device)  
-                sim_base_val = baseline_sims[idx]  
+                # Precomputed A+B target CLIP embedding (shape [D] → [1,D])
+                tgt_clip = tgt_clips[idx].unsqueeze(0).to(device)  # [1,D]
+                sim_base_val = baseline_sims[idx]  # float
 
+                # Optional pseudo A/B CLIP targets
                 tgtA_clip = None
                 tgtB_clip = None
                 if tgtA_clips is not None and tgtA_clips[idx] is not None:
@@ -451,6 +490,7 @@ def train_on_df(
                 for step in range(steps_per_image):
                     opt.zero_grad(set_to_none=True)
 
+                    # 1) Generate latents with qwen_edit_forward (autocast bf16)
                     with torch.autocast("cuda", dtype=DTYPE):
                         out = qwen_edit_forward(
                             pipeline,
@@ -466,20 +506,26 @@ def train_on_df(
                             and_neologism_emb=and_neologism_emb,
                             target_token_ids=target_token_ids,
                         )
-                        gen_lat = out.images  
+                        gen_lat = out.images  # latents
 
                     if not torch.isfinite(gen_lat).all():
                         print(f"[WARN] Row {idx}, step {step}: non-finite gen_lat; skipping.")
                         continue
 
-                    gen_img = latents_to_image_tensor(gen_lat)  
+                    # 2) Decode latents to image tensor (for CLIP)
+                    gen_img = latents_to_image_tensor(gen_lat)  # [B,3,H,W]
 
-                    gen_clip = clip_encode_from_tensor(gen_img, no_grad=False)  
+                    # 3) CLIP encode generated image WITH grad
+                    gen_clip = clip_encode_from_tensor(gen_img, no_grad=False)  # [B,D]
 
-
+                    # ===========================
+                    # 4) Multi-target CLIP task loss
+                    # ===========================
+                    # A+B similarity
                     sim_AB = F.cosine_similarity(gen_clip, tgt_clip, dim=-1).mean()
                     loss_AB = 1.0 - sim_AB
 
+                    # Ranking vs baseline on AB similarity
                     sim_base = torch.tensor(
                         sim_base_val,
                         device=device,
@@ -487,6 +533,7 @@ def train_on_df(
                     )
                     loss_rank = F.relu(MARGIN - sim_AB + sim_base)
 
+                    # A-only / B-only pseudo-target losses (if available)
                     loss_A = torch.tensor(0.0, device=device, dtype=sim_AB.dtype)
                     loss_B = torch.tensor(0.0, device=device, dtype=sim_AB.dtype)
 
@@ -498,23 +545,25 @@ def train_on_df(
                         sim_B = F.cosine_similarity(gen_clip, tgtB_clip, dim=-1).mean()
                         loss_B = 1.0 - sim_B
 
-                    # Loss of A and B computed as well so that it doesnt maximize AB by maximizing either a or b
+                    # Combined absolute CLIP loss (A+B + A-only + B-only)
                     loss_abs = W_AB * loss_AB + W_A * loss_A + W_B * loss_B
 
-                    # Final task loss == absolute + ranking
+                    # Final task loss: absolute + ranking
                     loss_task = LAMBDA_ABS * loss_abs + (1.0 - LAMBDA_ABS) * loss_rank
 
-
+                    # ===========================
+                    # 5) Manifold regularization
+                    # ===========================
                     e = and_neologism_emb
 
-                    # Norm hinge - keep ||e|| close to typical vocab norm (kinda redundant but works well in practice???)
+                    # (1) Norm hinge: keep ||e|| close to typical vocab norm
                     norm_e = e.norm()
                     loss_norm = LAMBDA_NORM * F.relu(norm_e - vocab_norm_mean)
 
-                    # Mean attraction - stay near mean of entrie vocab
+                    # (2) Mean attraction: stay near global vocab mean
                     loss_mean = LAMBDA_MEAN * (e - vocab_mean_fp32).pow(2).mean()
 
-                    #Orthogonal drift - don't stray too far from init
+                    # (3) Orthogonal drift: don't stray too far from init
                     loss_orth = LAMBDA_ORTHO * (e - orig_and_emb).pow(2).mean()
 
                     # Full loss
@@ -524,7 +573,7 @@ def train_on_df(
                         print(f"[WARN] Row {idx}, step {step}: non-finite loss; skipping.")
                         continue
 
-                
+                    # LOGGING accumulation
                     epoch_loss_abs_sum  += loss_abs.item()
                     epoch_loss_rank_sum += loss_rank.item()
                     epoch_loss_norm_sum += loss_norm.item()
@@ -532,7 +581,7 @@ def train_on_df(
                     epoch_loss_orth_sum += loss_orth.item()
                     epoch_num_steps     += 1
 
-                    
+                    # Backprop only w.r.t. and_neologism_emb
                     loss.backward()
                     torch.nn.utils.clip_grad_norm_([and_neologism_emb], 1.0)
                     opt.step()
@@ -593,7 +642,9 @@ def train_on_df(
                 )
 
 
-
+# ===========================
+# 5) Evaluation pass (save outputs)
+# ===========================
 @torch.no_grad()
 def evaluate_and_save(df: pd.DataFrame, subdir: str = "eval"):
     out_dir = os.path.join(SAVE_DIR, subdir)
@@ -604,7 +655,7 @@ def evaluate_and_save(df: pd.DataFrame, subdir: str = "eval"):
             src_img = pil_from_bytes(parse_img_field(row["source_img"])["bytes"])
             prompt  = str(row["instruction"])
 
-            #BASELINE - no neologism injection
+            # (A) BASELINE: no neologism injection
             out_base = qwen_edit_forward(
                 pipeline,
                 image=src_img,
@@ -616,12 +667,12 @@ def evaluate_and_save(df: pd.DataFrame, subdir: str = "eval"):
                 width=WIDTH,
                 output_type="pil",
                 return_dict=True,
-                and_neologism_emb=None,   
+                and_neologism_emb=None,   # <-- baseline
                 target_token_ids=None,
             )
             img_base = out_base.images[0]
 
-            # NEOLOGISM - inject trained embedding
+            # (B) NEOLOGISM: inject trained embedding
             out_neo = qwen_edit_forward(
                 pipeline,
                 image=src_img,
@@ -633,11 +684,12 @@ def evaluate_and_save(df: pd.DataFrame, subdir: str = "eval"):
                 width=WIDTH,
                 output_type="pil",
                 return_dict=True,
-                and_neologism_emb=and_neologism_emb,  
+                and_neologism_emb=and_neologism_emb,  # <-- neo
                 target_token_ids=target_token_ids,
             )
             img_neo = out_neo.images[0]
 
+            # Save images + prompt
             base_path = os.path.join(out_dir, f"img_{idx:05d}_base.png")
             neo_path  = os.path.join(out_dir, f"img_{idx:05d}_neo.png")
             cmp_path  = os.path.join(out_dir, f"img_{idx:05d}_cmp.png")
@@ -646,6 +698,7 @@ def evaluate_and_save(df: pd.DataFrame, subdir: str = "eval"):
             img_base.save(base_path)
             img_neo.save(neo_path)
 
+            # side-by-side comparison
             w, h = img_base.size
             cmp = Image.new("RGB", (w * 2, h))
             cmp.paste(img_base, (0, 0))
@@ -661,7 +714,9 @@ def evaluate_and_save(df: pd.DataFrame, subdir: str = "eval"):
             print(f"Eval row {idx} failed: {e}")
 
 
-#Compute loss on the random initilized embedding
+# ===========================
+# 5.5) Initial CLIP loss (epoch 0) – unchanged
+# ===========================
 @torch.no_grad()
 def compute_initial_epoch_loss(df):
     pos_sum = 0.0
@@ -724,6 +779,9 @@ def compute_initial_epoch_loss(df):
     return avg_pos, avg_neg
 
 
+# ===========================
+# 6) Main
+# ===========================
 if __name__ == "__main__":
     df = pd.read_csv(DATASET_PATH)
 
