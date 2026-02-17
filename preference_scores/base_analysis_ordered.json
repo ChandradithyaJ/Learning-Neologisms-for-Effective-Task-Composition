@@ -1,0 +1,277 @@
+{
+  "total_json_files_processed": 5,
+  "total_images_analyzed": 45,
+  "ordered_by": "base_chosen_count (descending)",
+  "results": [
+    {
+      "image": "img_00001",
+      "base_chosen_count": 5,
+      "total_appearances": 5,
+      "base_chosen_percentage": 100.0
+    },
+    {
+      "image": "img_00008",
+      "base_chosen_count": 5,
+      "total_appearances": 5,
+      "base_chosen_percentage": 100.0
+    },
+    {
+      "image": "img_00035",
+      "base_chosen_count": 5,
+      "total_appearances": 5,
+      "base_chosen_percentage": 100.0
+    },
+    {
+      "image": "img_00003",
+      "base_chosen_count": 4,
+      "total_appearances": 5,
+      "base_chosen_percentage": 80.0
+    },
+    {
+      "image": "img_00006",
+      "base_chosen_count": 4,
+      "total_appearances": 5,
+      "base_chosen_percentage": 80.0
+    },
+    {
+      "image": "img_00013",
+      "base_chosen_count": 4,
+      "total_appearances": 5,
+      "base_chosen_percentage": 80.0
+    },
+    {
+      "image": "img_00015",
+      "base_chosen_count": 4,
+      "total_appearances": 5,
+      "base_chosen_percentage": 80.0
+    },
+    {
+      "image": "img_00036",
+      "base_chosen_count": 4,
+      "total_appearances": 5,
+      "base_chosen_percentage": 80.0
+    },
+    {
+      "image": "img_00046",
+      "base_chosen_count": 4,
+      "total_appearances": 5,
+      "base_chosen_percentage": 80.0
+    },
+    {
+      "image": "img_00047",
+      "base_chosen_count": 4,
+      "total_appearances": 5,
+      "base_chosen_percentage": 80.0
+    },
+    {
+      "image": "img_00004",
+      "base_chosen_count": 3,
+      "total_appearances": 5,
+      "base_chosen_percentage": 60.0
+    },
+    {
+      "image": "img_00009",
+      "base_chosen_count": 3,
+      "total_appearances": 5,
+      "base_chosen_percentage": 60.0
+    },
+    {
+      "image": "img_00021",
+      "base_chosen_count": 3,
+      "total_appearances": 5,
+      "base_chosen_percentage": 60.0
+    },
+    {
+      "image": "img_00022",
+      "base_chosen_count": 3,
+      "total_appearances": 5,
+      "base_chosen_percentage": 60.0
+    },
+    {
+      "image": "img_00024",
+      "base_chosen_count": 3,
+      "total_appearances": 5,
+      "base_chosen_percentage": 60.0
+    },
+    {
+      "image": "img_00037",
+      "base_chosen_count": 3,
+      "total_appearances": 5,
+      "base_chosen_percentage": 60.0
+    },
+    {
+      "image": "img_00039",
+      "base_chosen_count": 3,
+      "total_appearances": 5,
+      "base_chosen_percentage": 60.0
+    },
+    {
+      "image": "img_00045",
+      "base_chosen_count": 3,
+      "total_appearances": 5,
+      "base_chosen_percentage": 60.0
+    },
+    {
+      "image": "img_00007",
+      "base_chosen_count": 2,
+      "total_appearances": 5,
+      "base_chosen_percentage": 40.0
+    },
+    {
+      "image": "img_00011",
+      "base_chosen_count": 2,
+      "total_appearances": 5,
+      "base_chosen_percentage": 40.0
+    },
+    {
+      "image": "img_00016",
+      "base_chosen_count": 2,
+      "total_appearances": 5,
+      "base_chosen_percentage": 40.0
+    },
+    {
+      "image": "img_00017",
+      "base_chosen_count": 2,
+      "total_appearances": 5,
+      "base_chosen_percentage": 40.0
+    },
+    {
+      "image": "img_00018",
+      "base_chosen_count": 2,
+      "total_appearances": 5,
+      "base_chosen_percentage": 40.0
+    },
+    {
+      "image": "img_00027",
+      "base_chosen_count": 2,
+      "total_appearances": 5,
+      "base_chosen_percentage": 40.0
+    },
+    {
+      "image": "img_00028",
+      "base_chosen_count": 2,
+      "total_appearances": 5,
+      "base_chosen_percentage": 40.0
+    },
+    {
+      "image": "img_00029",
+      "base_chosen_count": 2,
+      "total_appearances": 5,
+      "base_chosen_percentage": 40.0
+    },
+    {
+      "image": "img_00031",
+      "base_chosen_count": 2,
+      "total_appearances": 5,
+      "base_chosen_percentage": 40.0
+    },
+    {
+      "image": "img_00033",
+      "base_chosen_count": 2,
+      "total_appearances": 5,
+      "base_chosen_percentage": 40.0
+    },
+    {
+      "image": "img_00034",
+      "base_chosen_count": 2,
+      "total_appearances": 5,
+      "base_chosen_percentage": 40.0
+    },
+    {
+      "image": "img_00040",
+      "base_chosen_count": 2,
+      "total_appearances": 5,
+      "base_chosen_percentage": 40.0
+    },
+    {
+      "image": "img_00048",
+      "base_chosen_count": 2,
+      "total_appearances": 5,
+      "base_chosen_percentage": 40.0
+    },
+    {
+      "image": "img_00049",
+      "base_chosen_count": 2,
+      "total_appearances": 5,
+      "base_chosen_percentage": 40.0
+    },
+    {
+      "image": "img_00000",
+      "base_chosen_count": 1,
+      "total_appearances": 5,
+      "base_chosen_percentage": 20.0
+    },
+    {
+      "image": "img_00002",
+      "base_chosen_count": 1,
+      "total_appearances": 5,
+      "base_chosen_percentage": 20.0
+    },
+    {
+      "image": "img_00005",
+      "base_chosen_count": 1,
+      "total_appearances": 5,
+      "base_chosen_percentage": 20.0
+    },
+    {
+      "image": "img_00010",
+      "base_chosen_count": 1,
+      "total_appearances": 5,
+      "base_chosen_percentage": 20.0
+    },
+    {
+      "image": "img_00012",
+      "base_chosen_count": 1,
+      "total_appearances": 5,
+      "base_chosen_percentage": 20.0
+    },
+    {
+      "image": "img_00014",
+      "base_chosen_count": 1,
+      "total_appearances": 5,
+      "base_chosen_percentage": 20.0
+    },
+    {
+      "image": "img_00020",
+      "base_chosen_count": 1,
+      "total_appearances": 5,
+      "base_chosen_percentage": 20.0
+    },
+    {
+      "image": "img_00023",
+      "base_chosen_count": 1,
+      "total_appearances": 5,
+      "base_chosen_percentage": 20.0
+    },
+    {
+      "image": "img_00025",
+      "base_chosen_count": 1,
+      "total_appearances": 5,
+      "base_chosen_percentage": 20.0
+    },
+    {
+      "image": "img_00026",
+      "base_chosen_count": 1,
+      "total_appearances": 5,
+      "base_chosen_percentage": 20.0
+    },
+    {
+      "image": "img_00030",
+      "base_chosen_count": 1,
+      "total_appearances": 5,
+      "base_chosen_percentage": 20.0
+    },
+    {
+      "image": "img_00038",
+      "base_chosen_count": 1,
+      "total_appearances": 5,
+      "base_chosen_percentage": 20.0
+    },
+    {
+      "image": "img_00043",
+      "base_chosen_count": 1,
+      "total_appearances": 5,
+      "base_chosen_percentage": 20.0
+    }
+  ]
+}
